@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+broll_cache/
+output/
+*.wav
+*.tmp
+.venv/
