@@ -346,7 +346,7 @@ def fetch_pexels(keyword: str, config: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# B-roll fetching — AI (Replicate Minimax Video)
+# B-roll fetching — AI (Replicate Kling v1.6)
 # ---------------------------------------------------------------------------
 
 _MAX_VIDEO_BYTES = 200 * 1024 * 1024  # 200 MB
@@ -363,13 +363,99 @@ def _validate_replicate_url(url: str) -> str:
     return url
 
 
+def _generate_video_prompt(keyword: str, reason: str, config: dict) -> str:
+    """Use Claude to create a video scene description for Kling."""
+    prompt = (
+        f'Write a short video scene description (1-2 sentences) for AI video '
+        f'generation.\n\n'
+        f'CONTEXT:\n- B-roll keyword: "{keyword}"\n'
+        f'- Why this clip is needed: "{reason}"\n'
+        f'- The video overlays a talking-head reel for 3-4 seconds\n\n'
+        f'Rules:\n'
+        f'1. Feature a SAMURAI IN FULL TRADITIONAL ARMOR (yoroi) doing '
+        f'something MODERN or FUTURISTIC related to the keyword. Examples: '
+        f'typing on a holographic computer, commanding robotic armies, '
+        f'analyzing space dashboards, piloting a mech, reviewing data on a '
+        f'glowing screen, leading a robot battalion. The samurai is in full '
+        f'ancient armor but interacting with advanced technology.\n'
+        f'2. BRIGHT, well-lit scene — futuristic command center with glowing '
+        f'screens, neon-lit cityscape, sunlit rooftop with holographic displays, '
+        f'or open sky with spacecraft. High-key lighting, vivid colors.\n'
+        f'3. Include camera movement (slow tracking, dolly, orbit).\n'
+        f'4. Cinematic sci-fi aesthetic — think samurai meets cyberpunk.\n'
+        f'5. NO text, UI elements, or watermarks.\n\n'
+        f'Return ONLY the scene description.'
+    )
+    api_key = config.get("api_keys", {}).get("anthropic", "")
+    model = config.get("claude", {}).get("model", "claude-sonnet-4-20250514")
+    client = anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model=model, max_tokens=200,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return resp.content[0].text.strip()
+
+
+def _call_kling(video_prompt: str, api_token: str, duration: int = 5) -> str:
+    """Call Kling v1.6 on Replicate with polling. Returns validated video URL."""
+    import time as _time
+
+    print("[ai-broll] Submitting to Kling v1.6...")
+    resp = httpx.post(
+        "https://api.replicate.com/v1/models/kwaivgi/kling-v1.6-standard/predictions",
+        headers={"Authorization": f"Bearer {api_token}",
+                 "Content-Type": "application/json"},
+        json={"input": {
+            "prompt": video_prompt,
+            "negative_prompt": "dark, night, indoor, blurry, distorted, text",
+            "aspect_ratio": "9:16",
+            "duration": duration,
+            "cfg_scale": 0.5,
+        }},
+        timeout=30,
+    )
+    resp.raise_for_status()
+
+    pred = resp.json()
+    pred_id = pred["id"]
+    print(f"[ai-broll] Prediction {pred_id}, polling...")
+
+    # Poll until complete (Kling takes 2-5 minutes)
+    for _ in range(72):  # max 6 minutes
+        _time.sleep(5)
+        try:
+            poll = httpx.get(
+                f"https://api.replicate.com/v1/predictions/{pred_id}",
+                headers={"Authorization": f"Bearer {api_token}"},
+                timeout=30,
+            )
+            data = poll.json()
+        except (httpx.HTTPError, ValueError):
+            continue  # transient error, retry on next iteration
+        status = data.get("status", "")
+        if status == "succeeded":
+            url = data.get("output")
+            if isinstance(url, list):
+                url = url[0] if url else None
+            if not url:
+                raise RuntimeError("Kling succeeded but no output URL")
+            return _validate_replicate_url(url)
+        if status in ("failed", "canceled"):
+            raise RuntimeError(f"Kling failed: {data.get('error', 'Unknown')}")
+
+    raise RuntimeError("Kling timed out after 6 minutes")
+
+
 def fetch_ai_broll(keyword: str, reason: str, duration: float, config: dict) -> str:
-    """Generate an AI video clip via Minimax video-01 on Replicate."""
+    """Generate an AI video clip via Kling v1.6 on Replicate."""
     broll_cfg = config.get("broll", {})
     cache_dir = broll_cfg.get("ai_cache_dir", "./broll_cache/ai")
     api_token = broll_cfg.get("replicate_api_token", "")
     if not api_token:
-        raise RuntimeError("REPLICATE_API_TOKEN not set in config/env")
+        raise RuntimeError(
+            "REPLICATE_API_TOKEN not set. Add it to .env and config.yaml "
+            "under broll.replicate_api_token: ${REPLICATE_API_TOKEN}"
+        )
 
     slug = re.sub(r"[^\w\-]", "", keyword.lower().replace(" ", "_")[:50]) or "broll"
     video_path = Path(cache_dir) / f"{slug}_video.mp4"
@@ -378,73 +464,19 @@ def fetch_ai_broll(keyword: str, reason: str, duration: float, config: dict) -> 
 
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
 
-    # Ask Claude to write a video scene prompt (motion, not a still photo)
-    video_prompt_text = (
-        f'You are a visual director creating a short video scene description '
-        f'for AI video generation (Minimax).\n\n'
-        f'CONTEXT:\n- B-roll keyword: "{keyword}"\n- Why this clip is needed: "{reason}"\n'
-        f'- The video will overlay a talking-head reel for 3-4 seconds\n'
-        f'- Output format: vertical/portrait video\n\n'
-        f'Write a single, vivid scene description (1-3 sentences) for a short video clip. '
-        f'Follow these rules:\n\n'
-        f'1. Describe a SPECIFIC scene featuring a SAMURAI IN FULL TRADITIONAL ARMOR (yoroi) '
-        f'performing an ACTION related to the keyword. Include MOVEMENT — the samurai should be '
-        f'walking, turning, reaching, drawing a sword, etc.\n'
-        f'2. The scene MUST be OUTDOORS in BRIGHT DAYLIGHT — sun-drenched open field, cherry '
-        f'blossom garden, bright mountain path, or sunlit courtyard. NEVER indoors.\n'
-        f'3. Include camera movement (e.g. "slow tracking shot", "camera orbits around", '
-        f'"dolly forward toward").\n'
-        f'4. BRIGHT, vivid, high-key lighting. Blue sky visible. No shadows, no dark areas.\n'
-        f'5. NO text, UI elements, or watermarks.\n\n'
-        f'Return ONLY the scene description. No quotes, no explanation.'
-    )
-
-    api_key = config.get("api_keys", {}).get("anthropic", "")
-    model = config.get("claude", {}).get("model", "claude-sonnet-4-20250514")
-    client = anthropic.Anthropic(api_key=api_key)
-
+    # Generate video prompt via Claude
     print(f"[ai-broll] Generating video prompt for: {keyword}")
-    prompt_resp = client.messages.create(
-        model=model, max_tokens=300,
-        messages=[{"role": "user", "content": video_prompt_text}],
-    )
-    video_prompt = prompt_resp.content[0].text.strip()
+    video_prompt = _generate_video_prompt(keyword, reason, config)
+    print(f"[ai-broll] Kling prompt: {video_prompt[:80]}...")
 
-    # Call Minimax video-01 on Replicate
-    print(f"[ai-broll] Calling Minimax video-01: {video_prompt[:80]}...")
-    resp = httpx.post(
-        "https://api.replicate.com/v1/models/minimax/video-01/predictions",
-        headers={"Authorization": f"Bearer {api_token}",
-                 "Content-Type": "application/json", "Prefer": "wait"},
-        json={"input": {
-            "prompt": video_prompt + ", bright daylight, high key lighting, "
-                      "vibrant colors, outdoor scene, blue sky",
-            "prompt_optimizer": True,
-        }},
-        timeout=300,
-    )
-    resp.raise_for_status()
-    data = resp.json()
+    # Call Kling v1.6
+    video_url = _call_kling(video_prompt, api_token, duration=max(5, int(duration)))
 
-    if data.get("status") not in ("succeeded",):
-        raise RuntimeError(
-            f"Minimax prediction not complete: status={data.get('status')}, "
-            f"error={data.get('error', 'Unknown')}"
-        )
-
-    output_url = data.get("output")
-    if isinstance(output_url, list):
-        output_url = output_url[0] if output_url else None
-    if not output_url:
-        raise RuntimeError(f"Minimax generation failed: {data.get('error', 'Unknown')}")
-
-    output_url = _validate_replicate_url(output_url)
-
-    # Download the generated video (streaming to avoid buffering large files)
-    print("[ai-broll] Downloading Minimax video...")
+    # Download raw video
+    print("[ai-broll] Downloading Kling video...")
     raw_path = Path(cache_dir) / f"{slug}_raw.mp4"
     total = 0
-    with httpx.stream("GET", output_url, timeout=120) as stream:
+    with httpx.stream("GET", video_url, timeout=120) as stream:
         stream.raise_for_status()
         with open(raw_path, "wb") as f:
             for chunk in stream.iter_bytes(8192):
@@ -452,9 +484,10 @@ def fetch_ai_broll(keyword: str, reason: str, duration: float, config: dict) -> 
                 if total > _MAX_VIDEO_BYTES:
                     f.close()
                     raw_path.unlink(missing_ok=True)
-                    raise RuntimeError("Minimax video exceeds 200 MB size limit")
+                    raise RuntimeError("Kling video exceeds 200 MB size limit")
                 f.write(chunk)
 
+    # Scale/crop to portrait + trim to duration
     res = config.get("rendering", {}).get("output_resolution", [1080, 1920])
     w = res[0] if len(res) > 0 else 1080
     h = res[1] if len(res) > 1 else 1920
@@ -477,7 +510,7 @@ def fetch_ai_broll(keyword: str, reason: str, duration: float, config: dict) -> 
     finally:
         raw_path.unlink(missing_ok=True)
 
-    print(f"[ai-broll] Minimax video saved: {video_path}")
+    print(f"[ai-broll] Kling video saved: {video_path}")
     return str(video_path)
 
 
