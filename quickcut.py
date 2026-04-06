@@ -72,7 +72,8 @@ def _detect_resolution(path: str | Path) -> tuple[int, int]:
 
 
 def _center_crop_to_portrait(video_path: str, output_path: str,
-                             target_w: int, target_h: int) -> str:
+                             target_w: int, target_h: int,
+                             fps: int = 30) -> str:
     """Center-crop video to target aspect ratio, then scale to target size.
 
     e.g. 1920x1080 (16:9) -> center-crop to 608x1080 -> scale to 1080x1920.
@@ -90,7 +91,7 @@ def _center_crop_to_portrait(video_path: str, output_path: str,
     x = (src_w - crop_w) // 2
     y = (src_h - crop_h) // 2
 
-    vf = f"crop={crop_w}:{crop_h}:{x}:{y},scale={target_w}:{target_h},fps=30,setpts=N/(30*TB)"
+    vf = f"crop={crop_w}:{crop_h}:{x}:{y},scale={target_w}:{target_h},fps={fps},setpts=N/({fps}*TB)"
     cmd = [
         "ffmpeg", "-i", str(video_path),
         "-vf", vf,
@@ -104,7 +105,7 @@ def _center_crop_to_portrait(video_path: str, output_path: str,
     )
     if aprobe.stdout.strip():
         cmd += ["-c:a", "aac", "-b:a", "192k",
-                "-af", "aresample=async=1000:first_pts=0"]
+                "-af", "asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0"]
     cmd += ["-y", str(output_path)]
     _run_ffmpeg(cmd)
     print(f"[reframe] {src_w}x{src_h} -> crop {crop_w}x{crop_h} -> {target_w}x{target_h}")
@@ -827,12 +828,13 @@ def render_enhanced(video_path: str, broll_clips: list[dict], edit_points: list[
             x_expr = "".join(x_parts) + f"iw/2-(iw/{base_zoom})/2" + ")" * n
 
             filter_parts.append(
-                f"[0:v]zoompan=z='{z_expr}':x='{x_expr}'"
+                f"[0:v]fps={fps},"
+                f"zoompan=z='{z_expr}':x='{x_expr}'"
                 f":y='ih/2-(ih/zoom)/2':d=1:s={w}x{h}:fps={fps},"
                 f"setpts=N/({fps}*TB)[edited]"
             )
         else:
-            filter_parts.append(f"[0:v]scale={w}:{h},setpts=PTS-STARTPTS[edited]")
+            filter_parts.append(f"[0:v]fps={fps},scale={w}:{h},setpts=PTS-STARTPTS[edited]")
 
         prev_label = "edited"
         overlay_idx = 0
@@ -876,7 +878,7 @@ def render_enhanced(video_path: str, broll_clips: list[dict], edit_points: list[
 
         # Add audio sync filter to keep A/V aligned
         if has_audio:
-            filter_parts.append("[0:a]aresample=async=1000:first_pts=0[audio_out]")
+            filter_parts.append("[0:a]asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0[audio_out]")
 
         filter_str = ";".join(filter_parts)
 
@@ -887,6 +889,7 @@ def render_enhanced(video_path: str, broll_clips: list[dict], edit_points: list[
             cmd1 += ["-map", "[audio_out]", "-c:a", "aac", "-b:a", "192k"]
         cmd1 += [
             "-c:v", "libx264", "-crf", str(crf), "-pix_fmt", "yuv420p",
+            "-vsync", "cfr", "-r", str(fps),
             "-y", pass1_out,
         ]
         _run_ffmpeg(cmd1)
@@ -932,10 +935,12 @@ def enhance(input_path: str, output_path: str, config: dict,
         src_ratio = src_w / src_h
         target_ratio = target_w / target_h
 
+        render_fps = _safe_int(config.get("rendering", {}).get("fps", 30), 30, 1, 120)
+
         if abs(src_ratio - target_ratio) > 0.05:
             print(f"[reframe] Input is {src_w}x{src_h}, reframing to {target_w}x{target_h}")
             reframed = str(Path(tmp_dir) / "reframed.mp4")
-            _center_crop_to_portrait(input_path, reframed, target_w, target_h)
+            _center_crop_to_portrait(input_path, reframed, target_w, target_h, render_fps)
             working_input = reframed
         else:
             working_input = input_path
