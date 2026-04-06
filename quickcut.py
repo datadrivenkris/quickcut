@@ -57,6 +57,60 @@ def _get_duration(path: str | Path) -> float:
         return 0.0
 
 
+def _detect_resolution(path: str | Path) -> tuple[int, int]:
+    """Detect video resolution via ffprobe. Returns (width, height)."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height",
+         "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        parts = result.stdout.strip().split(",")
+        return int(parts[0]), int(parts[1])
+    return 1080, 1920
+
+
+def _center_crop_to_portrait(video_path: str, output_path: str,
+                             target_w: int, target_h: int) -> str:
+    """Center-crop video to target aspect ratio, then scale to target size.
+
+    e.g. 1920x1080 (16:9) -> center-crop to 608x1080 -> scale to 1080x1920.
+    If already matching, just scales.
+    """
+    src_w, src_h = _detect_resolution(video_path)
+    target_ratio = target_w / target_h
+
+    crop_w = int(src_h * target_ratio)
+    crop_h = src_h
+    if crop_w > src_w:
+        crop_w = src_w
+        crop_h = int(src_w / target_ratio)
+
+    x = (src_w - crop_w) // 2
+    y = (src_h - crop_h) // 2
+
+    vf = f"crop={crop_w}:{crop_h}:{x}:{y},scale={target_w}:{target_h},fps=30,setpts=N/(30*TB)"
+    cmd = [
+        "ffmpeg", "-i", str(video_path),
+        "-vf", vf,
+        "-c:v", "libx264", "-crf", "18",
+    ]
+    # Check if input has audio before adding audio filters
+    aprobe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a",
+         "-show_entries", "stream=index", "-of", "csv=p=0", str(video_path)],
+        capture_output=True, text=True,
+    )
+    if aprobe.stdout.strip():
+        cmd += ["-c:a", "aac", "-b:a", "192k",
+                "-af", "aresample=async=1000:first_pts=0"]
+    cmd += ["-y", str(output_path)]
+    _run_ffmpeg(cmd)
+    print(f"[reframe] {src_w}x{src_h} -> crop {crop_w}x{crop_h} -> {target_w}x{target_h}")
+    return output_path
+
+
 def _ass_filter_path(p: str) -> str:
     """Convert a path to FFmpeg ASS filter format (Windows-safe)."""
     return str(p).replace("\\", "/").replace(":", "\\:")
@@ -291,8 +345,11 @@ def fetch_pexels(keyword: str, config: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# B-roll fetching — AI (Replicate Flux + Ken Burns)
+# B-roll fetching — AI (Replicate Minimax Video)
 # ---------------------------------------------------------------------------
+
+_MAX_VIDEO_BYTES = 200 * 1024 * 1024  # 200 MB
+
 
 def _validate_replicate_url(url: str) -> str:
     """Ensure the URL is an HTTPS Replicate delivery URL (SSRF protection)."""
@@ -306,7 +363,7 @@ def _validate_replicate_url(url: str) -> str:
 
 
 def fetch_ai_broll(keyword: str, reason: str, duration: float, config: dict) -> str:
-    """Generate an AI image via Flux and convert to Ken Burns video."""
+    """Generate an AI video clip via Minimax video-01 on Replicate."""
     broll_cfg = config.get("broll", {})
     cache_dir = broll_cfg.get("ai_cache_dir", "./broll_cache/ai")
     api_token = broll_cfg.get("replicate_api_token", "")
@@ -320,96 +377,106 @@ def fetch_ai_broll(keyword: str, reason: str, duration: float, config: dict) -> 
 
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
 
-    # Generate image prompt via Claude
-    image_prompt_text = (
-        f'You are a visual director creating a single image prompt for AI image generation (Flux).\n\n'
-        f'CONTEXT:\n- B-roll keyword: "{keyword}"\n- Why this image is needed: "{reason}"\n'
-        f'- The image will overlay a talking-head video for 3-4 seconds\n'
-        f'- Output format: 9:16 vertical (portrait) — like a phone screen\n\n'
-        f'Write a single, detailed image prompt (1-3 sentences) that would generate a cinematic, '
-        f'professional photo. Follow these rules:\n\n'
+    # Ask Claude to write a video scene prompt (motion, not a still photo)
+    video_prompt_text = (
+        f'You are a visual director creating a short video scene description '
+        f'for AI video generation (Minimax).\n\n'
+        f'CONTEXT:\n- B-roll keyword: "{keyword}"\n- Why this clip is needed: "{reason}"\n'
+        f'- The video will overlay a talking-head reel for 3-4 seconds\n'
+        f'- Output format: vertical/portrait video\n\n'
+        f'Write a single, vivid scene description (1-3 sentences) for a short video clip. '
+        f'Follow these rules:\n\n'
         f'1. Describe a SPECIFIC scene featuring a SAMURAI IN FULL TRADITIONAL ARMOR (yoroi) '
-        f'performing the action or interacting with the concept described by the keyword. '
-        f'The samurai should be the focal point — shown from behind, from the side, or in a '
-        f'wide shot (never a close-up face).\n'
-        f'2. Include lighting direction (e.g. "warm golden hour light from left")\n'
-        f'3. Include camera angle or lens (e.g. "shot from behind", "wide cinematic 35mm")\n'
-        f'4. Use a vibrant, premium aesthetic — think: cinematic still from a samurai film\n'
-        f'5. The samurai should be DOING the thing the keyword describes\n'
-        f'6. NO text, logos, watermarks, or UI elements\n'
-        f'7. Use BRIGHT, well-lit scenes with high contrast and vivid color\n\n'
-        f'Return ONLY the image prompt text. No quotes, no explanation, no formatting.'
+        f'performing an ACTION related to the keyword. Include MOVEMENT — the samurai should be '
+        f'walking, turning, reaching, drawing a sword, etc.\n'
+        f'2. The scene MUST be OUTDOORS in BRIGHT DAYLIGHT — sun-drenched open field, cherry '
+        f'blossom garden, bright mountain path, or sunlit courtyard. NEVER indoors.\n'
+        f'3. Include camera movement (e.g. "slow tracking shot", "camera orbits around", '
+        f'"dolly forward toward").\n'
+        f'4. BRIGHT, vivid, high-key lighting. Blue sky visible. No shadows, no dark areas.\n'
+        f'5. NO text, UI elements, or watermarks.\n\n'
+        f'Return ONLY the scene description. No quotes, no explanation.'
     )
 
     api_key = config.get("api_keys", {}).get("anthropic", "")
     model = config.get("claude", {}).get("model", "claude-sonnet-4-20250514")
     client = anthropic.Anthropic(api_key=api_key)
 
-    print(f"[ai-broll] Generating image prompt for: {keyword}")
+    print(f"[ai-broll] Generating video prompt for: {keyword}")
     prompt_resp = client.messages.create(
         model=model, max_tokens=300,
-        messages=[{"role": "user", "content": image_prompt_text}],
+        messages=[{"role": "user", "content": video_prompt_text}],
     )
-    flux_prompt = prompt_resp.content[0].text.strip()
+    video_prompt = prompt_resp.content[0].text.strip()
 
-    # Call Replicate Flux
-    print(f"[ai-broll] Calling Flux: {flux_prompt[:80]}...")
+    # Call Minimax video-01 on Replicate
+    print(f"[ai-broll] Calling Minimax video-01: {video_prompt[:80]}...")
     resp = httpx.post(
-        "https://api.replicate.com/v1/models/black-forest-labs/flux-1.1-pro/predictions",
+        "https://api.replicate.com/v1/models/minimax/video-01/predictions",
         headers={"Authorization": f"Bearer {api_token}",
                  "Content-Type": "application/json", "Prefer": "wait"},
-        json={"input": {"prompt": flux_prompt, "aspect_ratio": "9:16",
-                        "output_format": "png", "output_quality": 90,
-                        "safety_tolerance": 5}},
-        timeout=120,
+        json={"input": {
+            "prompt": video_prompt + ", bright daylight, high key lighting, "
+                      "vibrant colors, outdoor scene, blue sky",
+            "prompt_optimizer": True,
+        }},
+        timeout=300,
     )
     resp.raise_for_status()
     data = resp.json()
+
+    if data.get("status") not in ("succeeded",):
+        raise RuntimeError(
+            f"Minimax prediction not complete: status={data.get('status')}, "
+            f"error={data.get('error', 'Unknown')}"
+        )
 
     output_url = data.get("output")
     if isinstance(output_url, list):
         output_url = output_url[0] if output_url else None
     if not output_url:
-        raise RuntimeError(f"Flux generation failed: {data.get('error', 'Unknown')}")
+        raise RuntimeError(f"Minimax generation failed: {data.get('error', 'Unknown')}")
 
     output_url = _validate_replicate_url(output_url)
 
-    # Download image with validation
-    img_resp = httpx.get(output_url, timeout=60)
-    img_resp.raise_for_status()
-    content_type = img_resp.headers.get("content-type", "")
-    if "image" not in content_type:
-        raise RuntimeError(f"Unexpected content-type from Replicate: {content_type}")
-    if len(img_resp.content) > _MAX_IMAGE_BYTES:
-        raise RuntimeError("Replicate image exceeds 50 MB size limit")
+    # Download the generated video (streaming to avoid buffering large files)
+    print("[ai-broll] Downloading Minimax video...")
+    raw_path = Path(cache_dir) / f"{slug}_raw.mp4"
+    total = 0
+    with httpx.stream("GET", output_url, timeout=120) as stream:
+        stream.raise_for_status()
+        with open(raw_path, "wb") as f:
+            for chunk in stream.iter_bytes(8192):
+                total += len(chunk)
+                if total > _MAX_VIDEO_BYTES:
+                    f.close()
+                    raw_path.unlink(missing_ok=True)
+                    raise RuntimeError("Minimax video exceeds 200 MB size limit")
+                f.write(chunk)
 
-    image_path = Path(cache_dir) / f"{slug}.png"
-    image_path.write_bytes(img_resp.content)
-    print(f"[ai-broll] Image saved: {image_path}")
-
-    # Ken Burns video
     res = config.get("rendering", {}).get("output_resolution", [1080, 1920])
-    w, h = res[0], res[1]
-    fps = 30
-    total_frames = int(duration * fps)
+    w = res[0] if len(res) > 0 else 1080
+    h = res[1] if len(res) > 1 else 1920
     fade_dur = min(0.3, duration / 3)
 
-    _run_ffmpeg([
-        "ffmpeg", "-loop", "1", "-i", str(image_path),
-        "-vf", (
-            f"scale={int(w * 1.3)}:{int(h * 1.3)},"
-            f"zoompan=z='1.09-0.09*on/{total_frames}':"
-            f"x='iw/2-(iw/zoom/2)-(iw*0.012)*(1-on/{total_frames})':"
-            f"y='ih/2-(ih/zoom/2)-(ih*0.012)*(1-on/{total_frames})':"
-            f"d={total_frames}:s={w}x{h}:fps={fps},"
-            f"fade=t=in:st=0:d={fade_dur},"
-            f"fade=t=out:st={max(0.0, duration - fade_dur)}:d={fade_dur}"
-        ),
-        "-c:v", "libx264", "-t", str(duration),
-        "-pix_fmt", "yuv420p", "-y", str(video_path),
-    ])
+    try:
+        _run_ffmpeg([
+            "ffmpeg", "-i", str(raw_path),
+            "-vf", (
+                f"scale={w}:{h}:force_original_aspect_ratio=increase,"
+                f"crop={w}:{h},"
+                f"fade=t=in:st=0:d={fade_dur},"
+                f"fade=t=out:st={max(0.0, duration - fade_dur)}:d={fade_dur}"
+            ),
+            "-t", str(duration),
+            "-c:v", "libx264", "-crf", "18",
+            "-pix_fmt", "yuv420p", "-an",
+            "-y", str(video_path),
+        ])
+    finally:
+        raw_path.unlink(missing_ok=True)
 
-    print(f"[ai-broll] Ken Burns video: {video_path}")
+    print(f"[ai-broll] Minimax video saved: {video_path}")
     return str(video_path)
 
 
@@ -461,7 +528,7 @@ def build_montage(config: dict, tmp_dir: str) -> tuple[str, float]:
     motion_clips = [c for c in clips if "static" not in c.stem.lower()]
     pool = motion_clips if len(motion_clips) >= 3 else clips
 
-    count_range = cfg.get("clip_count", [3, 3])
+    count_range = cfg.get("clip_count", [4, 4])
     dur_range = cfg.get("clip_duration", [1.2, 1.2])
     res = config.get("rendering", {}).get("output_resolution", [1080, 1920])
     w, h = res[0], res[1]
@@ -719,6 +786,14 @@ def render_enhanced(video_path: str, broll_clips: list[dict], edit_points: list[
     has_broll = bool(broll_clips)
     has_subs = bool(caption_ass) or bool(hook_ass)
 
+    # Detect if input has an audio stream
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a",
+         "-show_entries", "stream=index", "-of", "csv=p=0", video_path],
+        capture_output=True, text=True,
+    )
+    has_audio = bool(probe.stdout.strip())
+
     # If nothing to do in pass 1, go straight to pass 2
     if not has_edits and not has_montage and not has_broll:
         pass1_out = video_path
@@ -753,10 +828,11 @@ def render_enhanced(video_path: str, broll_clips: list[dict], edit_points: list[
 
             filter_parts.append(
                 f"[0:v]zoompan=z='{z_expr}':x='{x_expr}'"
-                f":y='ih/2-(ih/zoom)/2':d=1:s={w}x{h}:fps={fps}[edited]"
+                f":y='ih/2-(ih/zoom)/2':d=1:s={w}x{h}:fps={fps},"
+                f"setpts=N/({fps}*TB)[edited]"
             )
         else:
-            filter_parts.append(f"[0:v]scale={w}:{h}[edited]")
+            filter_parts.append(f"[0:v]scale={w}:{h},setpts=PTS-STARTPTS[edited]")
 
         prev_label = "edited"
         overlay_idx = 0
@@ -797,14 +873,21 @@ def render_enhanced(video_path: str, broll_clips: list[dict], edit_points: list[
             overlay_idx += 1
 
         pass1_out = str(Path(tmp_dir) / "pass1.mp4")
+
+        # Add audio sync filter to keep A/V aligned
+        if has_audio:
+            filter_parts.append("[0:a]aresample=async=1000:first_pts=0[audio_out]")
+
         filter_str = ";".join(filter_parts)
 
         print("[render] Pass 1: filter_complex (edits + overlays)...")
-        cmd1 = ["ffmpeg"] + inputs + [
-            "-filter_complex", filter_str,
-            "-map", f"[{prev_label}]", "-map", "0:a?",
+        cmd1 = ["ffmpeg"] + inputs + ["-filter_complex", filter_str]
+        cmd1 += ["-map", f"[{prev_label}]"]
+        if has_audio:
+            cmd1 += ["-map", "[audio_out]", "-c:a", "aac", "-b:a", "192k"]
+        cmd1 += [
             "-c:v", "libx264", "-crf", str(crf), "-pix_fmt", "yuv420p",
-            "-c:a", "copy", "-y", pass1_out,
+            "-y", pass1_out,
         ]
         _run_ffmpeg(cmd1)
         print("[render] Pass 1 complete")
@@ -842,8 +925,23 @@ def enhance(input_path: str, output_path: str, config: dict,
     tmp_dir = tempfile.mkdtemp(prefix="quickcut_")
 
     try:
-        # 1. Transcribe
-        transcript = transcribe(input_path, config)
+        # 0. Center-crop to portrait if needed
+        res = config.get("rendering", {}).get("output_resolution", [1080, 1920])
+        target_w, target_h = res[0], res[1]
+        src_w, src_h = _detect_resolution(input_path)
+        src_ratio = src_w / src_h
+        target_ratio = target_w / target_h
+
+        if abs(src_ratio - target_ratio) > 0.05:
+            print(f"[reframe] Input is {src_w}x{src_h}, reframing to {target_w}x{target_h}")
+            reframed = str(Path(tmp_dir) / "reframed.mp4")
+            _center_crop_to_portrait(input_path, reframed, target_w, target_h)
+            working_input = reframed
+        else:
+            working_input = input_path
+
+        # 1. Transcribe (use reframed video so timestamps match output)
+        transcript = transcribe(working_input, config)
 
         # 2. Analyze and fetch B-roll
         broll_clips = []
@@ -887,10 +985,10 @@ def enhance(input_path: str, output_path: str, config: dict,
                 hook_ass = str(Path(tmp_dir) / "hook.ass")
                 build_hook_ass(hook, hook_ass, config, platform)
 
-        # 6. Render
+        # 6. Render (use reframed input for correct aspect ratio)
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         render_enhanced(
-            input_path, broll_clips, edit_points,
+            working_input, broll_clips, edit_points,
             montage_path, montage_dur,
             caption_ass, hook_ass,
             output_path, config, tmp_dir,
