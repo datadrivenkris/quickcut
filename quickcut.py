@@ -904,7 +904,7 @@ def render_enhanced(video_path: str, broll_clips: list[dict], edit_points: list[
             filter_parts.append(
                 f"[{b_idx}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,"
                 f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,"
-                f"setpts=PTS-STARTPTS[{b_label}]"
+                f"setpts=PTS-STARTPTS+{start:.2f}/TB[{b_label}]"
             )
             filter_parts.append(
                 f"[{prev_label}][{b_label}]overlay=0:0:"
