@@ -581,8 +581,40 @@ def plan_edits(duration: float, broll_segments: list[dict], config: dict) -> lis
 # Montage builder
 # ---------------------------------------------------------------------------
 
+def _montage_effect_vf(idx: int, w: int, h: int, fps: int,
+                       seg_len: float) -> str:
+    """Build a VF string for a montage segment with motion effects.
+
+    Clip 0 (2s): random zoom-in, zoom-out, or pan.
+    Clips 1-3 (1s each): subtle slow Ken Burns zoom.
+    """
+    total_frames = int(seg_len * fps)
+    # Scale up slightly so we have room to zoom/pan
+    sw, sh = int(w * 1.15), int(h * 1.15)
+    base = f"scale={sw}:{sh}:force_original_aspect_ratio=decrease,pad={sw}:{sh}:(ow-iw)/2:(oh-ih)/2:black"
+
+    if idx == 0:
+        # First clip: pronounced effect
+        effect = random.choice(["zoom_in", "zoom_out", "pan"])
+        if effect == "zoom_in":
+            # Zoom from wide to tight
+            z = f"zoompan=z='1.0+0.15*on/{total_frames}':x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':d={total_frames}:s={w}x{h}:fps={fps}"
+        elif effect == "zoom_out":
+            # Zoom from tight to wide
+            z = f"zoompan=z='1.15-0.15*on/{total_frames}':x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':d={total_frames}:s={w}x{h}:fps={fps}"
+        else:
+            # Slow pan from left to right
+            max_pan = sw - w
+            z = f"zoompan=z='1.0':x='{max_pan}*on/{total_frames}':y='(ih-ih/zoom)/2':d={total_frames}:s={w}x{h}:fps={fps}"
+        return f"{base},{z}"
+    else:
+        # Clips 1-3: subtle Ken Burns slow zoom-in
+        z = f"zoompan=z='1.0+0.05*on/{total_frames}':x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':d={total_frames}:s={w}x{h}:fps={fps}"
+        return f"{base},{z}"
+
+
 def build_montage(config: dict, tmp_dir: str) -> tuple[str, float]:
-    """Build a randomized lifestyle montage from B-roll clips."""
+    """Build a 4-clip lifestyle montage: 2s hero + 3x 1s cuts."""
     cfg = config.get("montage", {})
     broll_dir = Path(cfg.get("broll_dir", ""))
 
@@ -598,32 +630,31 @@ def build_montage(config: dict, tmp_dir: str) -> tuple[str, float]:
     motion_clips = [c for c in clips if "static" not in c.stem.lower()]
     pool = motion_clips if len(motion_clips) >= 3 else clips
 
-    count_range = cfg.get("clip_count", [4, 4])
-    dur_range = cfg.get("clip_duration", [1.2, 1.2])
     res = config.get("rendering", {}).get("output_resolution", [1080, 1920])
     w, h = res[0], res[1]
     fps = config.get("rendering", {}).get("fps", 30)
 
-    count = random.randint(count_range[0], count_range[1])
-    selected = random.sample(pool, min(count, len(pool)))
+    # Always 4 clips: first is 2s, rest are 1s each (5s total)
+    durations = [2.0, 1.0, 1.0, 1.0]
+    selected = random.sample(pool, min(4, len(pool)))
 
     print(f"[montage] Building from {len(selected)} clips...")
     segments = []
     for i, clip in enumerate(selected):
         clip_dur = _get_duration(clip)
-        if clip_dur < 2.0:
+        seg_len = durations[i] if i < len(durations) else 1.0
+        if clip_dur < seg_len + 0.5:
             continue
-        seg_len = random.uniform(dur_range[0], dur_range[1])
         max_start = max(0.0, clip_dur - seg_len - 1.0)
         start = random.uniform(0.0, max_start) if max_start > 0 else 0.0
 
+        vf = _montage_effect_vf(i, w, h, fps, seg_len)
         seg_path = str(Path(tmp_dir) / f"seg_{i}.mp4")
         try:
             _run_ffmpeg([
                 "ffmpeg", "-ss", f"{start:.2f}", "-i", str(clip),
                 "-t", f"{seg_len:.2f}",
-                "-vf", f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
-                       f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black",
+                "-vf", vf,
                 "-r", str(fps), "-c:v", "libx264", "-crf", "18",
                 "-pix_fmt", "yuv420p", "-an", "-y", seg_path,
             ])
