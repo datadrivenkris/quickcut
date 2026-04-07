@@ -105,7 +105,7 @@ def _center_crop_to_portrait(video_path: str, output_path: str,
     )
     if aprobe.stdout.strip():
         cmd += ["-c:a", "aac", "-b:a", "192k",
-                "-af", "asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0"]
+                "-af", "aresample=async=1000:first_pts=0"]
     cmd += ["-y", str(output_path)]
     _run_ffmpeg(cmd)
     print(f"[reframe] {src_w}x{src_h} -> crop {crop_w}x{crop_h} -> {target_w}x{target_h}")
@@ -380,24 +380,29 @@ def _generate_video_prompt(keyword: str, reason: str, config: dict,
         f'- The video overlays a talking-head reel for 3-4 seconds\n\n'
         f'Rules:\n'
         f'1. ALWAYS feature exactly TWO characters:\n'
-        f'   - A SAMURAI MASTER in full traditional armor (yoroi) — the teacher\n'
+        f'   - A SAMURAI MASTER in full traditional armor (yoroi) — the teacher '
+        f'(secondary focus, slightly behind or to the side)\n'
         f'   - A MODERN PERSON (young professional, student, or businessman in '
-        f'contemporary clothes) — the learner\n'
-        f'   The samurai is TEACHING, DEMONSTRATING, or GUIDING the modern '
-        f'person on something related to the keyword and video topic. '
-        f'Examples: samurai pointing at a holographic dashboard while the '
-        f'student watches intently, samurai handing a glowing data scroll to '
-        f'a young businessman, samurai demonstrating sword technique while '
-        f'student mimics the stance. Both MUST be in motion — gesturing, '
-        f'walking, reaching, demonstrating. NEVER standing still.\n'
-        f'2. OUTDOORS in BRIGHT DAYLIGHT only — sun-drenched open field, '
-        f'cherry blossom garden, bright mountain path, sunlit rooftop, or '
-        f'golden-hour courtyard. Blue sky visible. NEVER indoors, NEVER dark, '
-        f'NEVER night, NEVER neon.\n'
-        f'3. Include camera movement (slow tracking shot following both '
-        f'characters, dolly forward, camera orbiting around them).\n'
-        f'4. BRIGHT, vivid, high-key lighting. Saturated colors. '
-        f'Sun visible or implied. No shadows, no dark areas.\n'
+        f'contemporary clothes) — the learner (PRIMARY FOCUS of the shot)\n'
+        f'   The camera should EMPHASIZE THE LEARNER — they are the main '
+        f'subject. The samurai guides from behind or beside them. '
+        f'Examples: a young professional at a modern desk studying a glowing '
+        f'holographic chart while the samurai stands behind pointing at it, '
+        f'a student in a sleek office reaching toward a floating data screen '
+        f'while the samurai nods approvingly, a businessman reviewing a '
+        f'tablet while the samurai mentor gestures beside him. '
+        f'Both MUST be in motion — gesturing, leaning in, reaching, '
+        f'demonstrating. NEVER standing still.\n'
+        f'2. MODERN INDOOR SETTING — sleek office, coworking space, '
+        f'minimalist conference room, modern loft with large windows, or '
+        f'high-rise with city views. The samurai looks out of place in '
+        f'this modern environment (that is the visual contrast).\n'
+        f'3. GOLDEN HOUR LIGHTING — warm amber/orange tones streaming '
+        f'through windows, soft golden light, warm color temperature. '
+        f'NOT harsh bright white. NOT dark. Think late afternoon sun '
+        f'pouring into a modern office.\n'
+        f'4. Include camera movement (slow tracking shot, dolly forward '
+        f'toward the learner, gentle orbit around both characters).\n'
         f'5. NO text, UI elements, or watermarks.\n\n'
         f'Return ONLY the scene description.'
     )
@@ -422,10 +427,10 @@ def _call_kling(video_prompt: str, api_token: str, duration: int = 5) -> str:
                  "Content-Type": "application/json"},
         json={"input": {
             "prompt": video_prompt
-                + ", bright daylight, high key lighting, vivid colors, "
-                "dynamic motion, outdoor scene, blue sky, cinematic",
-            "negative_prompt": "dark, night, dim, shadow, indoor, static, "
-                "still, frozen, blurry, distorted, text, watermark, neon",
+                + ", golden hour lighting, warm amber tones, modern office, "
+                "dynamic motion, cinematic, shallow depth of field",
+            "negative_prompt": "dark, night, dim, static, still, frozen, "
+                "blurry, distorted, text, watermark, harsh light, overexposed",
             "aspect_ratio": "9:16",
             "duration": duration,
             "cfg_scale": 0.7,
@@ -934,7 +939,7 @@ def render_enhanced(video_path: str, broll_clips: list[dict], edit_points: list[
 
         # Add audio sync filter to keep A/V aligned
         if has_audio:
-            filter_parts.append("[0:a]asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0[audio_out]")
+            filter_parts.append("[0:a]aresample=async=1000:first_pts=0[audio_out]")
 
         filter_str = ";".join(filter_parts)
 
@@ -946,6 +951,7 @@ def render_enhanced(video_path: str, broll_clips: list[dict], edit_points: list[
         cmd1 += [
             "-c:v", "libx264", "-crf", str(crf), "-pix_fmt", "yuv420p",
             "-vsync", "cfr", "-r", str(fps),
+            "-shortest",
             "-y", pass1_out,
         ]
         _run_ffmpeg(cmd1)
