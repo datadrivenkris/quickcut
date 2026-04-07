@@ -380,7 +380,7 @@ def _generate_video_prompt(keyword: str, reason: str, config: dict,
         f'- The video overlays a talking-head reel for 3-4 seconds\n\n'
         f'Rules:\n'
         f'1. ALWAYS feature exactly TWO characters:\n'
-        f'   - A SAMURAI MASTER in full traditional armor (yoroi) — the teacher. '
+        f'   - A SAMURAI MASTER in full armor — the teacher. '
         f'Calm, composed expression with a subtle hint of contentment.\n'
         f'   - A MODERN PERSON (young professional, student, or businessman in '
         f'contemporary clothes) — the learner (PRIMARY FOCUS of the shot). '
