@@ -381,29 +381,35 @@ def _generate_video_prompt(keyword: str, reason: str, config: dict,
         f'Rules:\n'
         f'1. ALWAYS feature exactly TWO characters:\n'
         f'   - A SAMURAI MASTER in full traditional armor (yoroi) — the teacher '
-        f'(secondary focus, slightly behind or to the side)\n'
+        f'(secondary focus, slightly behind or to the side). SMILING warmly.\n'
         f'   - A MODERN PERSON (young professional, student, or businessman in '
-        f'contemporary clothes) — the learner (PRIMARY FOCUS of the shot)\n'
+        f'contemporary clothes) — the learner (PRIMARY FOCUS of the shot). '
+        f'HAPPY expression — smiling, engaged, enthusiastic.\n'
         f'   The camera should EMPHASIZE THE LEARNER — they are the main '
         f'subject. The samurai guides from behind or beside them. '
-        f'Examples: a young professional at a modern desk studying a glowing '
-        f'holographic chart while the samurai stands behind pointing at it, '
-        f'a student in a sleek office reaching toward a floating data screen '
-        f'while the samurai nods approvingly, a businessman reviewing a '
-        f'tablet while the samurai mentor gestures beside him. '
+        f'Both characters should look HAPPY and ENGAGED — this is a positive '
+        f'mentorship moment. '
+        f'Examples: a smiling young professional at a modern desk studying a '
+        f'holographic chart while the samurai stands behind pointing at it '
+        f'with a warm smile, a happy student in a sleek office reaching '
+        f'toward a floating data screen while the samurai nods approvingly. '
         f'Both MUST be in motion — gesturing, leaning in, reaching, '
         f'demonstrating. NEVER standing still.\n'
         f'2. MODERN INDOOR SETTING — sleek office, coworking space, '
         f'minimalist conference room, modern loft with large windows, or '
         f'high-rise with city views. The samurai looks out of place in '
         f'this modern environment (that is the visual contrast).\n'
-        f'3. GOLDEN HOUR LIGHTING — warm amber/orange tones streaming '
-        f'through windows, soft golden light, warm color temperature. '
-        f'NOT harsh bright white. NOT dark. Think late afternoon sun '
-        f'pouring into a modern office.\n'
-        f'4. Include camera movement (slow tracking shot, dolly forward '
+        f'3. SOFT GOLDEN HOUR LIGHTING — gentle warm amber tones streaming '
+        f'through windows. LOW contrast, soft diffused light, NO harsh '
+        f'highlights. Think the soft warm glow of late afternoon sun '
+        f'through frosted glass. Muted, natural, filmic color grading. '
+        f'NOT bright, NOT overexposed, NOT high contrast.\n'
+        f'4. PHOTOREALISTIC style — real human faces with natural skin '
+        f'tones, realistic textures on armor and clothing, natural depth '
+        f'of field. NOT stylized, NOT cartoon, NOT anime.\n'
+        f'5. Include camera movement (slow tracking shot, dolly forward '
         f'toward the learner, gentle orbit around both characters).\n'
-        f'5. NO text, UI elements, or watermarks.\n\n'
+        f'6. NO text, UI elements, or watermarks.\n\n'
         f'Return ONLY the scene description.'
     )
     api_key = config.get("api_keys", {}).get("anthropic", "")
@@ -427,10 +433,12 @@ def _call_kling(video_prompt: str, api_token: str, duration: int = 5) -> str:
                  "Content-Type": "application/json"},
         json={"input": {
             "prompt": video_prompt
-                + ", golden hour lighting, warm amber tones, modern office, "
-                "dynamic motion, cinematic, shallow depth of field",
-            "negative_prompt": "dark, night, dim, static, still, frozen, "
-                "blurry, distorted, text, watermark, harsh light, overexposed",
+                + ", soft golden hour lighting, warm tones, photorealistic, "
+                "natural skin tones, low contrast, cinematic film grain, "
+                "happy expressions, smiling faces, dynamic motion",
+            "negative_prompt": "dark, night, static, still, frozen, blurry, "
+                "distorted, text, watermark, overexposed, high contrast, "
+                "harsh lighting, bright white, cartoon, anime, stylized",
             "aspect_ratio": "9:16",
             "duration": duration,
             "cfg_scale": 0.7,
