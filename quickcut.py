@@ -367,22 +367,25 @@ def _generate_video_prompt(keyword: str, reason: str, config: dict) -> str:
     """Use Claude to create a video scene description for Kling."""
     prompt = (
         f'Write a short video scene description (1-2 sentences) for AI video '
-        f'generation.\n\n'
+        f'generation. This MUST describe DYNAMIC MOTION — characters moving, '
+        f'walking, turning, gesturing, or performing actions.\n\n'
         f'CONTEXT:\n- B-roll keyword: "{keyword}"\n'
         f'- Why this clip is needed: "{reason}"\n'
         f'- The video overlays a talking-head reel for 3-4 seconds\n\n'
         f'Rules:\n'
         f'1. Feature a SAMURAI IN FULL TRADITIONAL ARMOR (yoroi) doing '
-        f'something MODERN or FUTURISTIC related to the keyword. Examples: '
-        f'typing on a holographic computer, commanding robotic armies, '
-        f'analyzing space dashboards, piloting a mech, reviewing data on a '
-        f'glowing screen, leading a robot battalion. The samurai is in full '
-        f'ancient armor but interacting with advanced technology.\n'
-        f'2. BRIGHT, well-lit scene — futuristic command center with glowing '
-        f'screens, neon-lit cityscape, sunlit rooftop with holographic displays, '
-        f'or open sky with spacecraft. High-key lighting, vivid colors.\n'
-        f'3. Include camera movement (slow tracking, dolly, orbit).\n'
-        f'4. Cinematic sci-fi aesthetic — think samurai meets cyberpunk.\n'
+        f'something MODERN or FUTURISTIC related to the keyword. The samurai '
+        f'MUST be in motion — walking forward, drawing a sword, turning to '
+        f'face camera, reaching toward a holographic screen, commanding troops, '
+        f'striding across a rooftop. NEVER standing still.\n'
+        f'2. OUTDOORS in BRIGHT DAYLIGHT only — sun-drenched open field, '
+        f'cherry blossom garden, bright mountain path, sunlit rooftop, or '
+        f'golden-hour courtyard. Blue sky visible. NEVER indoors, NEVER dark, '
+        f'NEVER night, NEVER neon.\n'
+        f'3. Include camera movement (slow tracking shot following the samurai, '
+        f'dolly forward, camera orbiting around subject).\n'
+        f'4. BRIGHT, vivid, high-key lighting. Saturated colors. '
+        f'Sun visible or implied. No shadows, no dark areas.\n'
         f'5. NO text, UI elements, or watermarks.\n\n'
         f'Return ONLY the scene description.'
     )
@@ -406,11 +409,14 @@ def _call_kling(video_prompt: str, api_token: str, duration: int = 5) -> str:
         headers={"Authorization": f"Bearer {api_token}",
                  "Content-Type": "application/json"},
         json={"input": {
-            "prompt": video_prompt,
-            "negative_prompt": "dark, night, indoor, blurry, distorted, text",
+            "prompt": video_prompt
+                + ", bright daylight, high key lighting, vivid colors, "
+                "dynamic motion, outdoor scene, blue sky, cinematic",
+            "negative_prompt": "dark, night, dim, shadow, indoor, static, "
+                "still, frozen, blurry, distorted, text, watermark, neon",
             "aspect_ratio": "9:16",
             "duration": duration,
-            "cfg_scale": 0.5,
+            "cfg_scale": 0.7,
         }},
         timeout=30,
     )
@@ -944,6 +950,11 @@ def render_enhanced(video_path: str, broll_clips: list[dict], edit_points: list[
         "ffmpeg", "-i", pass1_out,
         "-vf", ",".join(vf_parts),
         "-c:v", "libx264", "-crf", str(crf),
+        "-pix_fmt", "yuv420p",
+        "-color_range", "tv",
+        "-colorspace", "bt709",
+        "-color_trc", "bt709",
+        "-color_primaries", "bt709",
         "-c:a", "copy", "-y", output_path,
     ]
     _run_ffmpeg(cmd2)
