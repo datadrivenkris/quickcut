@@ -381,18 +381,20 @@ def _generate_video_prompt(keyword: str, reason: str, config: dict,
         f'Rules:\n'
         f'1. ALWAYS feature exactly TWO characters:\n'
         f'   - A SAMURAI MASTER in full traditional armor (yoroi) — the teacher '
-        f'(secondary focus, slightly behind or to the side). SMILING warmly.\n'
+        f'(secondary focus, slightly behind or to the side). Calm, '
+        f'composed expression with a subtle hint of contentment.\n'
         f'   - A MODERN PERSON (young professional, student, or businessman in '
         f'contemporary clothes) — the learner (PRIMARY FOCUS of the shot). '
-        f'HAPPY expression — smiling, engaged, enthusiastic.\n'
+        f'Mild contentment — focused but at ease, a gentle subtle smile, '
+        f'NOT overly excited or grinning. Think quiet confidence.\n'
         f'   The camera should EMPHASIZE THE LEARNER — they are the main '
         f'subject. The samurai guides from behind or beside them. '
-        f'Both characters should look HAPPY and ENGAGED — this is a positive '
-        f'mentorship moment. '
-        f'Examples: a smiling young professional at a modern desk studying a '
+        f'Both characters should look CALM and FOCUSED — this is a quiet '
+        f'mentorship moment, not a celebration. '
+        f'Examples: a focused young professional at a modern desk studying a '
         f'holographic chart while the samurai stands behind pointing at it '
-        f'with a warm smile, a happy student in a sleek office reaching '
-        f'toward a floating data screen while the samurai nods approvingly. '
+        f'with a composed expression, a calm student in a sleek office '
+        f'reaching toward a floating data screen while the samurai nods. '
         f'Both MUST be in motion — gesturing, leaning in, reaching, '
         f'demonstrating. NEVER standing still.\n'
         f'2. MODERN INDOOR SETTING — sleek office, coworking space, '
@@ -435,10 +437,11 @@ def _call_kling(video_prompt: str, api_token: str, duration: int = 5) -> str:
             "prompt": video_prompt
                 + ", soft golden hour lighting, warm tones, photorealistic, "
                 "natural skin tones, low contrast, cinematic film grain, "
-                "happy expressions, smiling faces, dynamic motion",
+                "calm focused expressions, subtle contentment, dynamic motion",
             "negative_prompt": "dark, night, static, still, frozen, blurry, "
                 "distorted, text, watermark, overexposed, high contrast, "
-                "harsh lighting, bright white, cartoon, anime, stylized",
+                "harsh lighting, bright white, cartoon, anime, stylized, "
+                "exaggerated smile, laughing, overly excited, grinning",
             "aspect_ratio": "9:16",
             "duration": duration,
             "cfg_scale": 0.7,
