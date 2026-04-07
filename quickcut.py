@@ -363,27 +363,39 @@ def _validate_replicate_url(url: str) -> str:
     return url
 
 
-def _generate_video_prompt(keyword: str, reason: str, config: dict) -> str:
+def _generate_video_prompt(keyword: str, reason: str, config: dict,
+                           transcript_context: str = "") -> str:
     """Use Claude to create a video scene description for Kling."""
+    ctx_line = ""
+    if transcript_context:
+        ctx_line = f'- Video topic (use this to make the scene relevant): "{transcript_context}"\n'
+
     prompt = (
         f'Write a short video scene description (1-2 sentences) for AI video '
-        f'generation. This MUST describe DYNAMIC MOTION — characters moving, '
-        f'walking, turning, gesturing, or performing actions.\n\n'
+        f'generation. This MUST describe DYNAMIC MOTION — two characters moving, '
+        f'gesturing, and interacting.\n\n'
         f'CONTEXT:\n- B-roll keyword: "{keyword}"\n'
         f'- Why this clip is needed: "{reason}"\n'
+        f'{ctx_line}'
         f'- The video overlays a talking-head reel for 3-4 seconds\n\n'
         f'Rules:\n'
-        f'1. Feature a SAMURAI IN FULL TRADITIONAL ARMOR (yoroi) doing '
-        f'something MODERN or FUTURISTIC related to the keyword. The samurai '
-        f'MUST be in motion — walking forward, drawing a sword, turning to '
-        f'face camera, reaching toward a holographic screen, commanding troops, '
-        f'striding across a rooftop. NEVER standing still.\n'
+        f'1. ALWAYS feature exactly TWO characters:\n'
+        f'   - A SAMURAI MASTER in full traditional armor (yoroi) — the teacher\n'
+        f'   - A MODERN PERSON (young professional, student, or businessman in '
+        f'contemporary clothes) — the learner\n'
+        f'   The samurai is TEACHING, DEMONSTRATING, or GUIDING the modern '
+        f'person on something related to the keyword and video topic. '
+        f'Examples: samurai pointing at a holographic dashboard while the '
+        f'student watches intently, samurai handing a glowing data scroll to '
+        f'a young businessman, samurai demonstrating sword technique while '
+        f'student mimics the stance. Both MUST be in motion — gesturing, '
+        f'walking, reaching, demonstrating. NEVER standing still.\n'
         f'2. OUTDOORS in BRIGHT DAYLIGHT only — sun-drenched open field, '
         f'cherry blossom garden, bright mountain path, sunlit rooftop, or '
         f'golden-hour courtyard. Blue sky visible. NEVER indoors, NEVER dark, '
         f'NEVER night, NEVER neon.\n'
-        f'3. Include camera movement (slow tracking shot following the samurai, '
-        f'dolly forward, camera orbiting around subject).\n'
+        f'3. Include camera movement (slow tracking shot following both '
+        f'characters, dolly forward, camera orbiting around them).\n'
         f'4. BRIGHT, vivid, high-key lighting. Saturated colors. '
         f'Sun visible or implied. No shadows, no dark areas.\n'
         f'5. NO text, UI elements, or watermarks.\n\n'
@@ -452,8 +464,11 @@ def _call_kling(video_prompt: str, api_token: str, duration: int = 5) -> str:
     raise RuntimeError("Kling timed out after 6 minutes")
 
 
-def fetch_ai_broll(keyword: str, reason: str, duration: float, config: dict) -> str:
+def fetch_ai_broll(keyword: str, reason: str, duration: float, config: dict,
+                   transcript_context: str = "") -> str:
     """Generate an AI video clip via Kling v1.6 on Replicate."""
+    import hashlib
+
     broll_cfg = config.get("broll", {})
     cache_dir = broll_cfg.get("ai_cache_dir", "./broll_cache/ai")
     api_token = broll_cfg.get("replicate_api_token", "")
@@ -464,7 +479,9 @@ def fetch_ai_broll(keyword: str, reason: str, duration: float, config: dict) -> 
         )
 
     slug = re.sub(r"[^\w\-]", "", keyword.lower().replace(" ", "_")[:50]) or "broll"
-    video_path = Path(cache_dir) / f"{slug}_video.mp4"
+    # Include transcript hash in cache key so each video gets unique B-roll
+    ctx_hash = hashlib.md5(transcript_context.encode()).hexdigest()[:8] if transcript_context else "default"
+    video_path = Path(cache_dir) / f"{slug}_{ctx_hash}_video.mp4"
     if video_path.exists():
         return str(video_path)
 
@@ -472,7 +489,7 @@ def fetch_ai_broll(keyword: str, reason: str, duration: float, config: dict) -> 
 
     # Generate video prompt via Claude
     print(f"[ai-broll] Generating video prompt for: {keyword}")
-    video_prompt = _generate_video_prompt(keyword, reason, config)
+    video_prompt = _generate_video_prompt(keyword, reason, config, transcript_context)
     print(f"[ai-broll] Kling prompt: {video_prompt[:80]}...")
 
     # Call Kling v1.6
@@ -998,6 +1015,7 @@ def enhance(input_path: str, output_path: str, config: dict,
             moments = analyze_broll(transcript, config)
             source = config.get("broll", {}).get("source", "ai")
             clip_dur = config.get("broll", {}).get("clip_duration", 3.5)
+            transcript_context = transcript.get("full_text", "")[:500]
 
             for moment in moments:
                 try:
@@ -1006,7 +1024,7 @@ def enhance(input_path: str, output_path: str, config: dict,
                     else:
                         clip_path = fetch_ai_broll(
                             moment["keyword"], moment.get("reason", ""),
-                            clip_dur, config)
+                            clip_dur, config, transcript_context)
                     broll_clips.append({**moment, "clip_path": clip_path})
                 except (RuntimeError, httpx.HTTPError, subprocess.CalledProcessError,
                         json.JSONDecodeError, OSError) as e:
