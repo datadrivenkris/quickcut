@@ -393,10 +393,13 @@ def _generate_video_prompt(keyword: str, reason: str, config: dict,
         f'equals in the frame. '
         f'Both characters should look CALM and FOCUSED — this is a quiet '
         f'mentorship moment, not a celebration. '
-        f'Examples: samurai and young professional sitting side by side at '
-        f'a modern desk reviewing a holographic chart together, samurai '
-        f'and student standing shoulder to shoulder at a whiteboard, '
-        f'samurai and businessman side by side looking at a shared screen. '
+        f'The SAMURAI is the one TEACHING — pointing, explaining, '
+        f'demonstrating. The modern person is LISTENING and LEARNING. '
+        f'Examples: samurai pointing at a holographic chart and explaining '
+        f'while the businessman beside him listens attentively, samurai '
+        f'drawing a diagram on a whiteboard while the student next to him '
+        f'watches and takes notes, samurai gesturing at a screen while '
+        f'guiding the professional sitting beside him. '
         f'Both MUST be in motion — gesturing, leaning in, reaching, '
         f'demonstrating. NEVER standing still.\n'
         f'2. MODERN INDOOR SETTING — sleek office, coworking space, '
@@ -589,40 +592,38 @@ def _montage_effect_vf(idx: int, w: int, h: int, fps: int,
                        seg_len: float) -> str:
     """Build a VF string for a montage segment with motion effects.
 
-    Uses scale+crop with animated expressions (NOT zoompan, which freezes
-    video inputs to a single frame).
+    Scales video larger than output, then uses a fixed crop at an
+    animated position to create zoom/pan effects on real video.
 
     Clip 0 (2s): pronounced zoom-in, zoom-out, or pan.
-    Clips 1-3 (1s each): subtle slow zoom-in.
+    Clips 1-3 (1s each): subtle slow pan.
     """
-    # Scale up 15% so we have room to animate crop position
-    sw, sh = int(w * 1.15), int(h * 1.15)
-    base = f"scale={sw}:{sh}:force_original_aspect_ratio=increase,crop={sw}:{sh}"
+    # Scale up 20% so we have room to pan/zoom via crop offset
+    sw, sh = int(w * 1.2), int(h * 1.2)
+    pad_x, pad_y = (sw - w) // 2, (sh - h) // 2
+    base = f"scale={sw}:{sh}:force_original_aspect_ratio=increase"
 
     if idx == 0:
         effect = random.choice(["zoom_in", "zoom_out", "pan"])
         if effect == "zoom_in":
-            # Animate crop from full frame to center (zoom in)
-            cw = f"({sw}-({sw}-{w})*t/{seg_len})"
-            ch = f"({sh}-({sh}-{h})*t/{seg_len})"
-            crop = f"crop=w={cw}:h={ch}:x=({sw}-{cw})/2:y=({sh}-{ch})/2,scale={w}:{h}"
+            # Pan from top-left toward center (simulates zoom-in feel)
+            x = f"({pad_x}*t/{seg_len})"
+            y = f"({pad_y}*t/{seg_len})"
         elif effect == "zoom_out":
-            # Animate crop from center to full frame (zoom out)
-            cw = f"({w}+({sw}-{w})*t/{seg_len})"
-            ch = f"({h}+({sh}-{h})*t/{seg_len})"
-            crop = f"crop=w={cw}:h={ch}:x=({sw}-{cw})/2:y=({sh}-{ch})/2,scale={w}:{h}"
+            # Pan from center toward top-left (simulates zoom-out)
+            x = f"({pad_x}-{pad_x}*t/{seg_len})"
+            y = f"({pad_y}-{pad_y}*t/{seg_len})"
         else:
             # Slow pan left to right
-            max_pan = sw - w
-            crop = f"crop=w={w}:h={h}:x={max_pan}*t/{seg_len}:y=({sh}-{h})/2"
-        return f"{base},{crop}"
+            x = f"({pad_x * 2}*t/{seg_len})"
+            y = str(pad_y)
+        return f"{base},crop={w}:{h}:{x}:{y}"
     else:
-        # Clips 1-3: subtle slow zoom-in (5% over the clip)
-        margin = int(w * 0.05)
-        cw = f"({sw}-{margin}*t/{seg_len})"
-        ch = f"({sh}-{int(h * 0.05)}*t/{seg_len})"
-        crop = f"crop=w={cw}:h={ch}:x=({sw}-{cw})/2:y=({sh}-{ch})/2,scale={w}:{h}"
-        return f"{base},{crop}"
+        # Clips 1-3: subtle slow drift from center outward
+        drift = pad_x // 3
+        x = f"({pad_x}+{drift}*t/{seg_len})"
+        y = str(pad_y)
+        return f"{base},crop={w}:{h}:{x}:{y}"
 
 
 def build_montage(config: dict, tmp_dir: str) -> tuple[str, float]:
