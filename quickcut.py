@@ -91,7 +91,7 @@ def _center_crop_to_portrait(video_path: str, output_path: str,
     x = (src_w - crop_w) // 2
     y = (src_h - crop_h) // 2
 
-    vf = f"crop={crop_w}:{crop_h}:{x}:{y},scale={target_w}:{target_h},fps={fps},setpts=N/({fps}*TB)"
+    vf = f"crop={crop_w}:{crop_h}:{x}:{y},scale={target_w}:{target_h},fps={fps},setpts=PTS-STARTPTS"
     cmd = [
         "ffmpeg", "-i", str(video_path),
         "-vf", vf,
@@ -538,8 +538,7 @@ def fetch_ai_broll(keyword: str, reason: str, duration: float, config: dict,
             "-vf", (
                 f"scale={w}:{h}:force_original_aspect_ratio=increase,"
                 f"crop={w}:{h},"
-                f"fade=t=in:st=0:d={fade_dur},"
-                f"fade=t=out:st={max(0.0, duration - fade_dur)}:d={fade_dur}"
+                f"fade=t=in:st=0:d={fade_dur}"
             ),
             "-t", str(duration),
             "-c:v", "libx264", "-crf", "18",
@@ -588,32 +587,40 @@ def _montage_effect_vf(idx: int, w: int, h: int, fps: int,
                        seg_len: float) -> str:
     """Build a VF string for a montage segment with motion effects.
 
-    Clip 0 (2s): random zoom-in, zoom-out, or pan.
-    Clips 1-3 (1s each): subtle slow Ken Burns zoom.
+    Uses scale+crop with animated expressions (NOT zoompan, which freezes
+    video inputs to a single frame).
+
+    Clip 0 (2s): pronounced zoom-in, zoom-out, or pan.
+    Clips 1-3 (1s each): subtle slow zoom-in.
     """
-    total_frames = int(seg_len * fps)
-    # Scale up slightly so we have room to zoom/pan
+    # Scale up 15% so we have room to animate crop position
     sw, sh = int(w * 1.15), int(h * 1.15)
-    base = f"scale={sw}:{sh}:force_original_aspect_ratio=decrease,pad={sw}:{sh}:(ow-iw)/2:(oh-ih)/2:black"
+    base = f"scale={sw}:{sh}:force_original_aspect_ratio=increase,crop={sw}:{sh}"
 
     if idx == 0:
-        # First clip: pronounced effect
         effect = random.choice(["zoom_in", "zoom_out", "pan"])
         if effect == "zoom_in":
-            # Zoom from wide to tight
-            z = f"zoompan=z='1.0+0.15*on/{total_frames}':x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':d={total_frames}:s={w}x{h}:fps={fps}"
+            # Animate crop from full frame to center (zoom in)
+            cw = f"({sw}-({sw}-{w})*t/{seg_len})"
+            ch = f"({sh}-({sh}-{h})*t/{seg_len})"
+            crop = f"crop=w={cw}:h={ch}:x=({sw}-{cw})/2:y=({sh}-{ch})/2,scale={w}:{h}"
         elif effect == "zoom_out":
-            # Zoom from tight to wide
-            z = f"zoompan=z='1.15-0.15*on/{total_frames}':x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':d={total_frames}:s={w}x{h}:fps={fps}"
+            # Animate crop from center to full frame (zoom out)
+            cw = f"({w}+({sw}-{w})*t/{seg_len})"
+            ch = f"({h}+({sh}-{h})*t/{seg_len})"
+            crop = f"crop=w={cw}:h={ch}:x=({sw}-{cw})/2:y=({sh}-{ch})/2,scale={w}:{h}"
         else:
-            # Slow pan from left to right
+            # Slow pan left to right
             max_pan = sw - w
-            z = f"zoompan=z='1.0':x='{max_pan}*on/{total_frames}':y='(ih-ih/zoom)/2':d={total_frames}:s={w}x{h}:fps={fps}"
-        return f"{base},{z}"
+            crop = f"crop=w={w}:h={h}:x={max_pan}*t/{seg_len}:y=({sh}-{h})/2"
+        return f"{base},{crop}"
     else:
-        # Clips 1-3: subtle Ken Burns slow zoom-in
-        z = f"zoompan=z='1.0+0.05*on/{total_frames}':x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':d={total_frames}:s={w}x{h}:fps={fps}"
-        return f"{base},{z}"
+        # Clips 1-3: subtle slow zoom-in (5% over the clip)
+        margin = int(w * 0.05)
+        cw = f"({sw}-{margin}*t/{seg_len})"
+        ch = f"({sh}-{int(h * 0.05)}*t/{seg_len})"
+        crop = f"crop=w={cw}:h={ch}:x=({sw}-{cw})/2:y=({sh}-{ch})/2,scale={w}:{h}"
+        return f"{base},{crop}"
 
 
 def build_montage(config: dict, tmp_dir: str) -> tuple[str, float]:
@@ -934,7 +941,7 @@ def render_enhanced(video_path: str, broll_clips: list[dict], edit_points: list[
                 f"[0:v]fps={fps},"
                 f"zoompan=z='{z_expr}':x='{x_expr}'"
                 f":y='ih/2-(ih/zoom)/2':d=1:s={w}x{h}:fps={fps},"
-                f"setpts=N/({fps}*TB)[edited]"
+                f"setpts=PTS-STARTPTS[edited]"
             )
         else:
             filter_parts.append(f"[0:v]fps={fps},scale={w}:{h},setpts=PTS-STARTPTS[edited]")
