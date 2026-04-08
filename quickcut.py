@@ -793,34 +793,57 @@ def build_caption_ass(transcript: dict, output_path: str, config: dict,
     return output_path
 
 
-def extract_hook(transcript: dict, max_words: int = 7) -> dict | None:
-    """Extract the opening hook sentence from the transcript."""
+_HOOK_PHRASES = [
+    "Nobody mentions this about {subject}...",
+    "I wish I knew this earlier..",
+    "Pause for a second",
+    "Ever notice this pattern with {subject}?",
+    "Here's the real truth",
+    "Let me save you hours",
+    "This may surprise you",
+    "You need this now",
+    "You may not agree with this...",
+    "I just figured this out",
+]
+
+
+def _extract_subject(transcript: dict) -> str:
+    """Pull a short subject phrase from the transcript for hook templates."""
+    full = transcript.get("full_text", "")
+    if not full:
+        return "this"
+    # Use first ~30 words, grab the longest noun-like phrase (2-4 words)
+    words = full.split()[:30]
+    # Simple heuristic: pick a 2-3 word chunk after common prepositions/verbs
+    markers = {"about", "with", "for", "is", "your", "the", "in", "on"}
+    for i, w in enumerate(words):
+        if w.lower() in markers and i + 2 < len(words):
+            chunk = " ".join(words[i + 1:i + 3]).strip(".,!?;:")
+            if len(chunk) > 3:
+                return chunk.lower()
+    # Fallback: first 2-3 content words
+    skip = {"i", "the", "a", "an", "so", "and", "but", "or", "if", "you",
+            "we", "they", "this", "that", "it", "is", "are", "was", "do"}
+    content = [w for w in words if w.lower() not in skip]
+    if content:
+        return " ".join(content[:2]).strip(".,!?;:").lower()
+    return "this"
+
+
+def extract_hook(transcript: dict) -> dict | None:
+    """Pick a random hook phrase and fill in the video subject."""
     segments = transcript.get("segments", [])
     if not segments:
         return None
 
-    chosen = None
-    for seg in segments:
-        text = seg.get("text", "").strip()
-        if not text:
-            continue
-        if len(text.split()) < 4 and text[0].islower():
-            continue
-        chosen = seg
-        break
-    if chosen is None:
-        chosen = segments[0]
+    subject = _extract_subject(transcript)
+    phrase = random.choice(_HOOK_PHRASES).replace("{subject}", subject)
 
-    text = chosen.get("text", "").strip()
-    if not text:
-        return None
-    words = text.split()
-    if len(words) > max_words:
-        text = " ".join(words[:max_words])
-    if not text.endswith((".", "!", "?")):
-        text = text.rstrip(",;:\u2014-") + "..."
+    # Use the first segment's end time for hook duration
+    first_end = segments[0].get("end", 4.0)
+    hook_end = max(min(first_end, 4.0), 1.0)
 
-    return {"text": text, "start": 0.0, "end": chosen.get("end", 4.0)}
+    return {"text": phrase, "start": 0.0, "end": hook_end}
 
 
 def _get_hook_config(config: dict, platform: str | None = None) -> dict:

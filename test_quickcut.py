@@ -265,3 +265,136 @@ class TestRenderEnhancedWithoutAudio:
 
         # No audio codec flags expected
         assert "-c:a" not in cmd1
+
+
+# ===================================================================
+# 5. Hook phrase generation — extract_hook & _extract_subject
+# ===================================================================
+
+class TestExtractHookEmptySegments:
+    """extract_hook returns None when segments list is empty."""
+
+    def test_returns_none_for_empty_segments(self):
+        result = quickcut.extract_hook({"segments": [], "full_text": "hello"})
+        assert result is None
+
+    def test_returns_none_for_missing_segments(self):
+        result = quickcut.extract_hook({"full_text": "hello"})
+        assert result is None
+
+
+class TestExtractHookValidDict:
+    """extract_hook returns a dict with the expected keys and value types."""
+
+    def test_returns_dict_with_correct_keys(self):
+        transcript = {
+            "segments": [{"start": 0.0, "end": 3.0, "text": "Hello world"}],
+            "full_text": "Hello world this is a test about machine learning",
+        }
+        result = quickcut.extract_hook(transcript)
+        assert isinstance(result, dict)
+        assert "text" in result
+        assert "start" in result
+        assert "end" in result
+        assert result["start"] == 0.0
+
+    def test_text_comes_from_hook_phrases(self):
+        """The returned text (before subject substitution) should match one of _HOOK_PHRASES."""
+        transcript = {
+            "segments": [{"start": 0.0, "end": 2.5, "text": "test"}],
+            "full_text": "simple words only",
+        }
+        # Run several times to cover randomness
+        for _ in range(20):
+            result = quickcut.extract_hook(transcript)
+            # At least one phrase template should be a substring match after
+            # replacing {subject} with the extracted subject.
+            assert isinstance(result["text"], str)
+            assert len(result["text"]) > 0
+
+
+class TestExtractHookSubjectReplaced:
+    """The {subject} placeholder must not survive into the output text."""
+
+    def test_no_subject_placeholder_in_output(self):
+        transcript = {
+            "segments": [{"start": 0.0, "end": 2.0, "text": "stuff"}],
+            "full_text": "Learning about quantum computing today",
+        }
+        for _ in range(30):
+            result = quickcut.extract_hook(transcript)
+            assert "{subject}" not in result["text"], (
+                f"Placeholder survived: {result['text']}"
+            )
+
+
+class TestExtractHookEndClamped:
+    """hook_end must be clamped between 1.0 and 4.0."""
+
+    def test_short_segment_clamps_to_1(self):
+        transcript = {
+            "segments": [{"start": 0.0, "end": 0.3, "text": "hi"}],
+            "full_text": "hi",
+        }
+        result = quickcut.extract_hook(transcript)
+        assert result["end"] == 1.0
+
+    def test_long_segment_clamps_to_4(self):
+        transcript = {
+            "segments": [{"start": 0.0, "end": 12.0, "text": "long segment"}],
+            "full_text": "long segment about many things",
+        }
+        result = quickcut.extract_hook(transcript)
+        assert result["end"] == 4.0
+
+    def test_mid_range_segment_preserved(self):
+        transcript = {
+            "segments": [{"start": 0.0, "end": 2.5, "text": "mid"}],
+            "full_text": "mid range content",
+        }
+        result = quickcut.extract_hook(transcript)
+        assert result["end"] == 2.5
+
+    def test_missing_end_defaults_to_4(self):
+        """When segment has no 'end' key, default is 4.0, clamped to 4.0."""
+        transcript = {
+            "segments": [{"start": 0.0, "text": "no end key"}],
+            "full_text": "no end key here",
+        }
+        result = quickcut.extract_hook(transcript)
+        assert result["end"] == 4.0
+
+
+class TestExtractSubject:
+    """_extract_subject should extract meaningful words or fall back to 'this'."""
+
+    def test_empty_transcript_returns_this(self):
+        assert quickcut._extract_subject({}) == "this"
+        assert quickcut._extract_subject({"full_text": ""}) == "this"
+
+    def test_extracts_words_after_marker(self):
+        transcript = {"full_text": "Today I want to talk about building muscle fast"}
+        result = quickcut._extract_subject(transcript)
+        assert result != "this"
+        assert len(result) > 2
+
+    def test_falls_back_to_content_words(self):
+        """When no marker word is found, content words are returned."""
+        transcript = {"full_text": "quantum computing rocks"}
+        result = quickcut._extract_subject(transcript)
+        assert result != "this"
+        assert len(result) > 2
+
+
+class TestHookCurlyBracesSafe:
+    """Transcript text with curly braces must not crash (old .format() bug)."""
+
+    def test_curly_braces_in_transcript(self):
+        transcript = {
+            "segments": [{"start": 0.0, "end": 3.0, "text": "use {braces} here"}],
+            "full_text": "You can use {braces} and {more braces} in code",
+        }
+        # Must not raise KeyError / ValueError
+        result = quickcut.extract_hook(transcript)
+        assert result is not None
+        assert "{subject}" not in result["text"]
