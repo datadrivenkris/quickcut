@@ -1000,17 +1000,13 @@ def render_enhanced(video_path: str, broll_clips: list[dict], edit_points: list[
 
         pass1_out = str(Path(tmp_dir) / "pass1.mp4")
 
-        # Add audio sync filter to keep A/V aligned
-        if has_audio:
-            filter_parts.append("[0:a]asetpts=PTS-STARTPTS[audio_out]")
-
         filter_str = ";".join(filter_parts)
 
         print("[render] Pass 1: filter_complex (edits + overlays)...")
         cmd1 = ["ffmpeg"] + inputs + ["-filter_complex", filter_str]
         cmd1 += ["-map", f"[{prev_label}]"]
         if has_audio:
-            cmd1 += ["-map", "[audio_out]", "-c:a", "aac", "-b:a", "192k"]
+            cmd1 += ["-map", "0:a", "-c:a", "aac", "-b:a", "192k"]
         cmd1 += [
             "-c:v", "libx264", "-crf", str(crf), "-pix_fmt", "yuv420p",
             "-vsync", "cfr", "-r", str(fps),
