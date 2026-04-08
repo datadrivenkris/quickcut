@@ -457,7 +457,7 @@ def _call_kling(video_prompt: str, api_token: str, duration: int = 5) -> str:
                 "exaggerated smile, laughing, overly excited, grinning",
             "aspect_ratio": "9:16",
             "duration": duration,
-            "cfg_scale": 0.7,
+            "cfg_scale": 0.85,
         }},
         timeout=30,
     )
