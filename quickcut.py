@@ -380,7 +380,10 @@ def _generate_video_prompt(keyword: str, reason: str, config: dict,
         f'- The video overlays a talking-head reel for 3-4 seconds\n\n'
         f'Rules:\n'
         f'1. ALWAYS feature exactly TWO characters:\n'
-        f'   - A SAMURAI MASTER in full armor — the teacher. '
+        f'   - A SAMURAI WARRIOR in weathered, battle-worn armor — the teacher. '
+        f'Think the style from "The Last Samurai" or "Assassin\'s Creed" — '
+        f'dark layered leather and metal plates, worn kabuto helmet, '
+        f'faded clan insignia, practical and rugged, NOT pristine or ornate. '
         f'Calm, composed expression with a subtle hint of contentment.\n'
         f'   - A MODERN PERSON (young professional, student, or businessman in '
         f'contemporary clothes) — the learner (PRIMARY FOCUS of the shot). '
@@ -592,36 +595,40 @@ def _montage_effect_vf(idx: int, w: int, h: int, fps: int,
                        seg_len: float) -> str:
     """Build a VF string for a montage segment with motion effects.
 
-    Scales video larger than output, then uses a fixed crop at an
-    animated position to create zoom/pan effects on real video.
+    Scales video to exact oversized dimensions, then crops at animated
+    x/y offsets to create zoom/pan on real video.
 
-    Clip 0 (2s): pronounced zoom-in, zoom-out, or pan.
-    Clips 1-3 (1s each): subtle slow pan.
+    Clip 0 (2s): pronounced pan or zoom effect.
+    Clips 1-3 (1s each): subtle slow drift.
     """
-    # Scale up 20% so we have room to pan/zoom via crop offset
-    sw, sh = int(w * 1.2), int(h * 1.2)
+    # Scale up 25% and force exact size for reliable crop math
+    sw, sh = int(w * 1.25), int(h * 1.25)
+    # Make sw/sh even (required by some codecs)
+    sw, sh = sw + (sw % 2), sh + (sh % 2)
     pad_x, pad_y = (sw - w) // 2, (sh - h) // 2
-    base = f"scale={sw}:{sh}:force_original_aspect_ratio=increase"
+    # Force exact dimensions: scale up, then crop to exact oversized target
+    base = (f"scale={sw}:{sh}:force_original_aspect_ratio=increase,"
+            f"crop={sw}:{sh}")
 
     if idx == 0:
         effect = random.choice(["zoom_in", "zoom_out", "pan"])
         if effect == "zoom_in":
-            # Pan from top-left toward center (simulates zoom-in feel)
-            x = f"({pad_x}*t/{seg_len})"
-            y = f"({pad_y}*t/{seg_len})"
+            # Start wide (top-left corner), drift to center
+            x = f"min({pad_x}*t/{seg_len:.1f}\\,{pad_x})"
+            y = f"min({pad_y}*t/{seg_len:.1f}\\,{pad_y})"
         elif effect == "zoom_out":
-            # Pan from center toward top-left (simulates zoom-out)
-            x = f"({pad_x}-{pad_x}*t/{seg_len})"
-            y = f"({pad_y}-{pad_y}*t/{seg_len})"
+            # Start centered, drift to top-left
+            x = f"max({pad_x}-{pad_x}*t/{seg_len:.1f}\\,0)"
+            y = f"max({pad_y}-{pad_y}*t/{seg_len:.1f}\\,0)"
         else:
-            # Slow pan left to right
-            x = f"({pad_x * 2}*t/{seg_len})"
+            # Slow pan left to right across full range
+            x = f"min({pad_x * 2}*t/{seg_len:.1f}\\,{pad_x * 2})"
             y = str(pad_y)
         return f"{base},crop={w}:{h}:{x}:{y}"
     else:
-        # Clips 1-3: subtle slow drift from center outward
-        drift = pad_x // 3
-        x = f"({pad_x}+{drift}*t/{seg_len})"
+        # Clips 1-3: subtle slow horizontal drift
+        drift = max(pad_x // 2, 10)
+        x = f"min({pad_x}+{drift}*t/{seg_len:.1f}\\,{pad_x + drift})"
         y = str(pad_y)
         return f"{base},crop={w}:{h}:{x}:{y}"
 
