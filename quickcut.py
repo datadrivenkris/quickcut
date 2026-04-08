@@ -409,14 +409,18 @@ def _generate_video_prompt(keyword: str, reason: str, config: dict,
         f'minimalist conference room, modern loft with large windows, or '
         f'high-rise with city views. The samurai looks out of place in '
         f'this modern environment (that is the visual contrast).\n'
-        f'3. SOFT GOLDEN HOUR LIGHTING — gentle warm amber tones streaming '
-        f'through windows. LOW contrast, soft diffused light, NO harsh '
-        f'highlights. Think the soft warm glow of late afternoon sun '
-        f'through frosted glass. Muted, natural, filmic color grading. '
-        f'NOT bright, NOT overexposed, NOT high contrast.\n'
-        f'4. PHOTOREALISTIC style — real human faces with natural skin '
-        f'tones, realistic textures on armor and clothing, natural depth '
-        f'of field. NOT stylized, NOT cartoon, NOT anime.\n'
+        f'3. NATURAL OFFICE LIGHTING — the scene should look like it was '
+        f'filmed with a real camera in an actual office. Even, flat, '
+        f'natural light from overhead fluorescents or large windows. '
+        f'Slight warm tone but mostly neutral white balance. '
+        f'VERY LOW contrast — no dramatic shadows, no blown-out highlights, '
+        f'no cinematic color grading. Think raw footage from a Sony A7III, '
+        f'flat color profile, as if no color correction has been applied.\n'
+        f'4. PHOTOREALISTIC and DOCUMENTARY style — real human faces with '
+        f'natural skin tones and imperfections, realistic fabric textures, '
+        f'natural depth of field with slight bokeh. Should look like a '
+        f'real photograph, not CGI or a render. NOT stylized, NOT cartoon, '
+        f'NOT anime, NOT high contrast, NOT cinematic color grading.\n'
         f'5. Include camera movement (slow tracking shot, dolly forward '
         f'toward the learner, gentle orbit around both characters).\n'
         f'6. NO text, UI elements, or watermarks.\n\n'
@@ -443,12 +447,13 @@ def _call_kling(video_prompt: str, api_token: str, duration: int = 5) -> str:
                  "Content-Type": "application/json"},
         json={"input": {
             "prompt": video_prompt
-                + ", soft golden hour lighting, warm tones, photorealistic, "
-                "natural skin tones, low contrast, cinematic film grain, "
-                "calm focused expressions, subtle contentment, dynamic motion",
+                + ", photorealistic, natural office lighting, flat color profile, "
+                "low contrast, natural skin tones, documentary style, "
+                "real camera footage, calm expressions, dynamic motion",
             "negative_prompt": "dark, night, static, still, frozen, blurry, "
                 "distorted, text, watermark, overexposed, high contrast, "
                 "harsh lighting, bright white, cartoon, anime, stylized, "
+                "cinematic color grading, dramatic lighting, CGI, render, "
                 "exaggerated smile, laughing, overly excited, grinning",
             "aspect_ratio": "9:16",
             "duration": duration,
