@@ -600,46 +600,41 @@ def _montage_effect_vf(idx: int, w: int, h: int, fps: int,
                        seg_len: float) -> str:
     """Build a VF string for a montage segment with motion effects.
 
-    Scales video larger than output, then uses zoompan with d=1 per
-    frame to animate the crop position across the oversized source.
+    Scales video slightly larger than output, then uses an animated crop
+    expression with 't' (time in seconds) to pan across the frame.
+    NO zoompan — it freezes video to a single frame.
 
-    Clip 0 (2s): pronounced pan or zoom effect.
+    Clip 0 (2s): pronounced pan effect.
     Clips 1-3 (1s each): subtle slow drift.
     """
-    total_frames = int(seg_len * fps)
-    # Scale up 25%
-    sw, sh = int(w * 1.25), int(h * 1.25)
+    # Scale up 20% to create room for panning
+    sw, sh = int(w * 1.2), int(h * 1.2)
     sw, sh = sw + (sw % 2), sh + (sh % 2)
     pad_x, pad_y = (sw - w) // 2, (sh - h) // 2
 
-    # Use scale to exact oversized dimensions
     base = f"scale={sw}:{sh}:force_original_aspect_ratio=increase,crop={sw}:{sh}"
 
     if idx == 0:
         effect = random.choice(["zoom_in", "zoom_out", "pan"])
         if effect == "zoom_in":
-            # Pan from corner toward center
-            x_expr = f"{pad_x}*on/{total_frames}"
-            y_expr = f"{pad_y}*on/{total_frames}"
+            # Pan from top-left corner toward center
+            x = f"'if(lt(t,{seg_len}),{pad_x}*t/{seg_len},{pad_x})'"
+            y = f"'if(lt(t,{seg_len}),{pad_y}*t/{seg_len},{pad_y})'"
         elif effect == "zoom_out":
-            # Pan from center toward corner
-            x_expr = f"{pad_x}-{pad_x}*on/{total_frames}"
-            y_expr = f"{pad_y}-{pad_y}*on/{total_frames}"
+            # Pan from center toward top-left
+            x = f"'if(lt(t,{seg_len}),{pad_x}-{pad_x}*t/{seg_len},0)'"
+            y = f"'if(lt(t,{seg_len}),{pad_y}-{pad_y}*t/{seg_len},0)'"
         else:
             # Slow pan left to right
-            x_expr = f"{pad_x * 2}*on/{total_frames}"
-            y_expr = str(pad_y)
+            x = f"'if(lt(t,{seg_len}),{pad_x*2}*t/{seg_len},{pad_x*2})'"
+            y = f"'{pad_y}'"
     else:
         # Clips 1-3: subtle horizontal drift
-        drift = max(pad_x // 2, 10)
-        x_expr = f"{pad_x}+{drift}*on/{total_frames}"
-        y_expr = str(pad_y)
+        drift = max(pad_x // 3, 8)
+        x = f"'if(lt(t,{seg_len}),{pad_x}+{drift}*t/{seg_len},{pad_x+drift})'"
+        y = f"'{pad_y}'"
 
-    # zoompan with d=1 processes every input frame (not just first)
-    # z=1 means no zoom, just pan via x/y
-    zp = (f"zoompan=z='1':x='{x_expr}':y='{y_expr}'"
-          f":d=1:s={w}x{h}:fps={fps}")
-    return f"{base},{zp}"
+    return f"{base},crop={w}:{h}:{x}:{y}"
 
 
 def build_montage(config: dict, tmp_dir: str) -> tuple[str, float]:
@@ -1007,7 +1002,7 @@ def render_enhanced(video_path: str, broll_clips: list[dict], edit_points: list[
 
         # Add audio sync filter to keep A/V aligned
         if has_audio:
-            filter_parts.append("[0:a]aresample=async=1000:first_pts=0[audio_out]")
+            filter_parts.append("[0:a]asetpts=PTS-STARTPTS[audio_out]")
 
         filter_str = ";".join(filter_parts)
 
