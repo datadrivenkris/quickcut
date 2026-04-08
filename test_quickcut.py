@@ -386,6 +386,137 @@ class TestExtractSubject:
         assert len(result) > 2
 
 
+# ===================================================================
+# 6. Description generation
+# ===================================================================
+
+class TestDescriptionPromptTemplate:
+    """_DESCRIPTION_PROMPT must be a valid format string with {transcript}."""
+
+    def test_format_with_transcript_does_not_crash(self):
+        result = quickcut._DESCRIPTION_PROMPT.format(transcript="test")
+        assert "test" in result
+
+
+class TestGenerateDescriptionNoKey:
+    """generate_description returns '' when no API key is available."""
+
+    def test_returns_empty_when_no_key_in_config(self):
+        config = {"api_keys": {"anthropic": ""}}
+        with patch.dict("os.environ", {}, clear=True):
+            result = quickcut.generate_description("some transcript", config)
+        assert result == ""
+
+    def test_returns_empty_when_config_missing_api_keys(self):
+        with patch.dict("os.environ", {}, clear=True):
+            result = quickcut.generate_description("some transcript", {})
+        assert result == ""
+
+    def test_returns_empty_when_env_key_also_missing(self):
+        config = {"api_keys": {}}
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": ""}, clear=False):
+            result = quickcut.generate_description("some transcript", config)
+        assert result == ""
+
+
+class TestGenerateDescriptionCallsClaude:
+    """generate_description should call the Anthropic client correctly."""
+
+    @patch("quickcut.anthropic")
+    def test_calls_client_with_transcript(self, mock_anthropic_mod):
+        mock_client = MagicMock()
+        mock_anthropic_mod.Anthropic.return_value = mock_client
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="  Generated description  ")]
+        mock_client.messages.create.return_value = mock_response
+
+        config = {"api_keys": {"anthropic": "sk-test-key"}}
+        result = quickcut.generate_description("My transcript text", config)
+
+        # Verify client was created with the key
+        mock_anthropic_mod.Anthropic.assert_called_once_with(api_key="sk-test-key")
+
+        # Verify messages.create was called
+        mock_client.messages.create.assert_called_once()
+        call_kwargs = mock_client.messages.create.call_args[1]
+
+        # Verify the prompt contains the transcript text
+        user_content = call_kwargs["messages"][0]["content"]
+        assert "My transcript text" in user_content
+
+        # Verify max_tokens
+        assert call_kwargs["max_tokens"] == 500
+
+    @patch("quickcut.anthropic")
+    def test_returns_stripped_response(self, mock_anthropic_mod):
+        mock_client = MagicMock()
+        mock_anthropic_mod.Anthropic.return_value = mock_client
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="  \n Description with whitespace \n  ")]
+        mock_client.messages.create.return_value = mock_response
+
+        config = {"api_keys": {"anthropic": "sk-test-key"}}
+        result = quickcut.generate_description("transcript", config)
+
+        assert result == "Description with whitespace"
+
+    @patch("quickcut.anthropic")
+    def test_uses_env_key_as_fallback(self, mock_anthropic_mod):
+        mock_client = MagicMock()
+        mock_anthropic_mod.Anthropic.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="desc")]
+        mock_client.messages.create.return_value = mock_response
+
+        config = {"api_keys": {"anthropic": ""}}
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-env-key"}):
+            quickcut.generate_description("text", config)
+
+        mock_anthropic_mod.Anthropic.assert_called_once_with(api_key="sk-env-key")
+
+
+class TestEnhanceReturnType:
+    """enhance() must return a tuple of (str, str) — (output_path, description)."""
+
+    @patch("quickcut.generate_description", return_value="A cool description")
+    @patch("quickcut.render_enhanced")
+    @patch("quickcut.build_hook_ass", return_value="hook.ass")
+    @patch("quickcut.extract_hook", return_value={"text": "hook", "start": 0.0, "end": 2.0})
+    @patch("quickcut.build_caption_ass")
+    @patch("quickcut.build_montage", return_value=("", 0.0))
+    @patch("quickcut.plan_edits", return_value=[])
+    @patch("quickcut.analyze_broll", return_value=[])
+    @patch("quickcut.transcribe", return_value={"segments": [], "full_text": "hello", "duration": 10.0})
+    @patch("quickcut._detect_resolution", return_value=(1080, 1920))
+    @patch("quickcut.shutil.rmtree")
+    @patch("quickcut.tempfile.mkdtemp", return_value="/tmp/quickcut_test")
+    def test_returns_tuple_of_two_strings(
+        self, mock_mkdtemp, mock_rmtree, mock_res,
+        mock_transcribe, mock_broll, mock_edits, mock_montage,
+        mock_caption, mock_hook, mock_hook_ass,
+        mock_render, mock_desc,
+    ):
+        config = {
+            "rendering": {"output_resolution": [1080, 1920], "fps": 30, "crf": 18},
+            "dynamic_edits": {},
+            "broll": {"enabled": False},
+            "montage": {"enabled": False},
+            "hook_text": {"enabled": False},
+        }
+
+        with patch.object(Path, "mkdir"):
+            result = quickcut.enhance("input.mp4", "output.mp4", config)
+
+        assert isinstance(result, tuple), f"Expected tuple, got {type(result)}"
+        assert len(result) == 2, f"Expected 2-element tuple, got {len(result)}"
+        assert isinstance(result[0], str), f"First element should be str, got {type(result[0])}"
+        assert isinstance(result[1], str), f"Second element should be str, got {type(result[1])}"
+        assert result[0] == "output.mp4"
+        assert result[1] == "A cool description"
+
+
 class TestHookCurlyBracesSafe:
     """Transcript text with curly braces must not crash (old .format() bug)."""
 

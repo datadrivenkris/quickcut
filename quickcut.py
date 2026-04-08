@@ -806,6 +806,54 @@ _HOOK_PHRASES = [
     "I just figured this out",
 ]
 
+_DESCRIPTION_PROMPT = """\
+You are a world-class copywriter for @kris_Consults, who helps multi-site \
+business owners make sense of their data and run their business by the numbers.
+
+Write a single social media description for a short-form video reel. \
+It must work across TikTok, Instagram Reels, YouTube Shorts, X/Twitter, \
+and Facebook.
+
+Transcript:
+{transcript}
+
+Rules:
+1. HOOK (first line): A punchy 1-liner that stops the scroll. Use curiosity, \
+a bold claim, or a relatable pain point. This line appears before "...more".
+2. BODY (2-3 short lines): Expand on the value with line breaks. Be specific \
+about the problem or solution in the video. Educate and entertain — make the \
+reader feel smarter for reading it.
+3. CTA: A compelling call-to-action on its own line. Be creative — don't \
+just say "follow me". Drive engagement (save, share, comment, follow).
+4. HASHTAGS: 5-8 on the final line. Mix broad reach tags (#business \
+#entrepreneur) with niche tags (#multisite #businessdata). None over 25 chars.
+5. Total length: 150-300 characters before hashtags.
+6. Tone: Confident, direct, educational, slightly entertaining. Like a \
+trusted advisor who also makes you think. NO emojis unless absolutely necessary.
+7. Write in second person ("you", "your business"). Never use "I".
+
+Return ONLY the description text. No quotes, labels, or explanation.\
+"""
+
+
+def generate_description(transcript_text: str, config: dict) -> str:
+    """Generate an SEO-optimized social media description from transcript."""
+    api_key = config.get("api_keys", {}).get("anthropic", "")
+    model = config.get("claude", {}).get("model", "claude-sonnet-4-20250514")
+    if not api_key:
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return ""
+
+    print("[description] Generating social media description...")
+    client = anthropic.Anthropic(api_key=api_key)
+    response = client.messages.create(
+        model=model, max_tokens=500,
+        messages=[{"role": "user", "content": _DESCRIPTION_PROMPT.format(
+            transcript=transcript_text[:2000])}],
+    )
+    return response.content[0].text.strip()
+
 
 def _extract_subject(transcript: dict) -> str:
     """Pull a short subject phrase from the transcript for hook templates."""
@@ -1078,8 +1126,11 @@ def render_enhanced(video_path: str, broll_clips: list[dict], edit_points: list[
 # ---------------------------------------------------------------------------
 
 def enhance(input_path: str, output_path: str, config: dict,
-            platform: str | None = None) -> str:
-    """Full enhancement pipeline: transcribe → analyze → render."""
+            platform: str | None = None) -> tuple[str, str]:
+    """Full enhancement pipeline: transcribe → analyze → render.
+
+    Returns (output_path, description).
+    """
     tmp_dir = tempfile.mkdtemp(prefix="quickcut_")
 
     try:
@@ -1146,7 +1197,19 @@ def enhance(input_path: str, output_path: str, config: dict,
                 hook_ass = str(Path(tmp_dir) / "hook.ass")
                 build_hook_ass(hook, hook_ass, config, platform)
 
-        # 6. Render (use reframed input for correct aspect ratio)
+        # 6. Generate social media description
+        description = ""
+        try:
+            description = generate_description(
+                transcript.get("full_text", ""), config)
+            if description:
+                desc_path = str(Path(output_path).with_suffix(".txt"))
+                Path(desc_path).write_text(description, encoding="utf-8")
+                print(f"[description] Saved: {desc_path}")
+        except Exception as e:
+            print(f"[description] Failed (non-blocking): {e}")
+
+        # 7. Render (use reframed input for correct aspect ratio)
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         render_enhanced(
             working_input, broll_clips, edit_points,
@@ -1156,7 +1219,7 @@ def enhance(input_path: str, output_path: str, config: dict,
         )
 
         print(f"\n[done] Output: {output_path}")
-        return output_path
+        return output_path, description
 
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -1185,4 +1248,4 @@ if __name__ == "__main__":
         config.setdefault("broll", {})["source"] = args.broll_source
 
     output = args.output or f"output/enhanced/{Path(args.input).stem}_quickcut.mp4"
-    enhance(args.input, output, config, args.platform)
+    output_path, description = enhance(args.input, output, config, args.platform)
