@@ -105,7 +105,7 @@ def _center_crop_to_portrait(video_path: str, output_path: str,
     )
     if aprobe.stdout.strip():
         cmd += ["-c:a", "aac", "-b:a", "192k",
-                "-af", "aresample=async=1000:first_pts=0"]
+                "-af", "aresample=async=1000:first_pts=0,asetpts=PTS-STARTPTS"]
     cmd += ["-y", str(output_path)]
     _run_ffmpeg(cmd)
     print(f"[reframe] {src_w}x{src_h} -> crop {crop_w}x{crop_h} -> {target_w}x{target_h}")
@@ -380,7 +380,7 @@ def _generate_video_prompt(keyword: str, reason: str, config: dict,
         f'- The video overlays a talking-head reel for 3-4 seconds\n\n'
         f'Rules:\n'
         f'1. ALWAYS feature exactly TWO characters:\n'
-        f'   - A CHINESE-FILIPINO SAMURAI WARRIOR, around 35 years old, in weathered, battle-worn '
+        f'   - An ASIAN SAMURAI WARRIOR (Japanese) in weathered, battle-worn '
         f'armor — the teacher. '
         f'Think the style from "The Last Samurai" or "Assassin\'s Creed" — '
         f'dark layered leather and metal plates, worn kabuto helmet, '
@@ -823,67 +823,6 @@ def extract_hook(transcript: dict, max_words: int = 7) -> dict | None:
     return {"text": text, "start": 0.0, "end": chosen.get("end", 4.0)}
 
 
-# ---------------------------------------------------------------------------
-# Social media description generator
-# ---------------------------------------------------------------------------
-
-_DESCRIPTION_PROMPT = """\
-You are a world-class copywriter and social media manager for @kris_Consults, \
-who helps multi-site business owners get the numbers they need to run their \
-business.
-
-Write a social media description for a short-form video reel based on this \
-transcript. The description must work across TikTok, Instagram Reels, YouTube \
-Shorts, X/Twitter, and Facebook.
-
-Transcript:
-{transcript}
-
-Rules:
-1. HOOK LINE (first line): A punchy 1-liner that makes people stop scrolling. \
-Use curiosity, a bold claim, or a relatable pain point. This line appears \
-before the "...more" fold on every platform.
-2. BODY (2-3 short lines): Expand on the value. Use line breaks for \
-readability. Speak directly to multi-site business owners. Be specific about \
-the problem/solution in the video.
-3. CTA: End with "Follow @kris_Consults for more" on its own line.
-4. HASHTAGS: Add 5-8 relevant hashtags on the final line. Mix broad reach \
-tags (#business #entrepreneur) with niche tags (#multisite #businessdata \
-#numbersthatmatter). NO hashtag should be longer than 25 characters.
-5. Total length: 150-300 characters before hashtags (fits all platforms).
-6. Tone: Confident, direct, no fluff. Like a trusted advisor, not a \
-salesperson. NO emojis unless absolutely necessary.
-7. DO NOT use "I" — write in second person ("you", "your business").
-
-Return ONLY the description. No quotes, no explanation, no labels.\
-"""
-
-
-def generate_description(transcript_text: str, config: dict) -> str:
-    """Generate an SEO-optimized social media description from transcript."""
-    api_key = config.get("api_keys", {}).get("anthropic", "")
-    model = config.get("claude", {}).get("model", "claude-sonnet-4-20250514")
-
-    if not api_key:
-        import os
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        return ""
-
-    client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model=model,
-        max_tokens=500,
-        messages=[{
-            "role": "user",
-            "content": _DESCRIPTION_PROMPT.format(
-                transcript=transcript_text[:2000]
-            ),
-        }],
-    )
-    return response.content[0].text.strip()
-
-
 def _get_hook_config(config: dict, platform: str | None = None) -> dict:
     """Resolve hook_text config for a platform, falling back to default."""
     ht = config.get("hook_text", {})
@@ -1062,13 +1001,18 @@ def render_enhanced(video_path: str, broll_clips: list[dict], edit_points: list[
 
         pass1_out = str(Path(tmp_dir) / "pass1.mp4")
 
+        if has_audio:
+            filter_parts.append(
+                "[0:a]aresample=async=1000:first_pts=0,asetpts=PTS-STARTPTS[aout]"
+            )
+
         filter_str = ";".join(filter_parts)
 
         print("[render] Pass 1: filter_complex (edits + overlays)...")
         cmd1 = ["ffmpeg"] + inputs + ["-filter_complex", filter_str]
         cmd1 += ["-map", f"[{prev_label}]"]
         if has_audio:
-            cmd1 += ["-map", "0:a", "-c:a", "aac", "-b:a", "192k"]
+            cmd1 += ["-map", "[aout]", "-c:a", "aac", "-b:a", "192k"]
         cmd1 += [
             "-c:v", "libx264", "-crf", str(crf), "-pix_fmt", "yuv420p",
             "-vsync", "cfr", "-r", str(fps),
@@ -1179,20 +1123,7 @@ def enhance(input_path: str, output_path: str, config: dict,
                 hook_ass = str(Path(tmp_dir) / "hook.ass")
                 build_hook_ass(hook, hook_ass, config, platform)
 
-        # 6. Generate social media description
-        description = ""
-        try:
-            print("[description] Generating social media description...")
-            description = generate_description(
-                transcript.get("full_text", ""), config)
-            # Save alongside video
-            desc_path = str(Path(output_path).with_suffix(".txt"))
-            Path(desc_path).write_text(description, encoding="utf-8")
-            print(f"[description] Saved: {desc_path}")
-        except Exception as e:
-            print(f"[description] Failed: {e}")
-
-        # 7. Render (use reframed input for correct aspect ratio)
+        # 6. Render (use reframed input for correct aspect ratio)
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         render_enhanced(
             working_input, broll_clips, edit_points,
