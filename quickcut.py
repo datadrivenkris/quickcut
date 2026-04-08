@@ -380,7 +380,7 @@ def _generate_video_prompt(keyword: str, reason: str, config: dict,
         f'- The video overlays a talking-head reel for 3-4 seconds\n\n'
         f'Rules:\n'
         f'1. ALWAYS feature exactly TWO characters:\n'
-        f'   - An ASIAN SAMURAI WARRIOR (Japanese) in weathered, battle-worn '
+        f'   - A CHINESE-FILIPINO SAMURAI WARRIOR, around 35 years old, in weathered, battle-worn '
         f'armor — the teacher. '
         f'Think the style from "The Last Samurai" or "Assassin\'s Creed" — '
         f'dark layered leather and metal plates, worn kabuto helmet, '
