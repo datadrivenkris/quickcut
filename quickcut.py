@@ -1005,28 +1005,39 @@ def render_enhanced(video_path: str, broll_clips: list[dict], edit_points: list[
             base_zoom = 0.96
             shift_px = int(w * _safe_float(cfg_edits.get("shift_amount", 0.03), 0.03, 0.0, 0.2))
 
-            z_parts, x_parts = [], []
-            for pt in edit_points:
-                f_start = int(pt["time"] * fps)
-                f_end = int((pt["time"] + pt["duration"]) * fps)
-                if pt["type"] == "zoom_in":
-                    z_parts.append(f"if(between(on,{f_start},{f_end}),{zoom},")
-                    x_parts.append(f"if(between(on,{f_start},{f_end}),iw/2-(iw/{zoom})/2,")
-                elif pt["type"] == "zoom_out":
-                    z_parts.append(f"if(between(on,{f_start},{f_end}),{base_zoom},")
-                    x_parts.append(f"if(between(on,{f_start},{f_end}),iw/2-(iw/{base_zoom})/2,")
-                elif pt["type"] == "shift":
-                    z_parts.append(f"if(between(on,{f_start},{f_end}),1.0,")
-                    x_parts.append(f"if(between(on,{f_start},{f_end}),iw/2-(iw/1.0)/2+{shift_px},")
+            # Scale up to max zoom level, then use animated crop for edits.
+            # This avoids zoompan which retimes frames and breaks A/V sync.
+            max_z = max(zoom, 1.0 / base_zoom)
+            sw, sh = int(w * max_z) + 2, int(h * max_z) + 2
+            sw, sh = sw + (sw % 2), sh + (sh % 2)  # ensure even
 
-            n = len(z_parts)
-            z_expr = "".join(z_parts) + str(base_zoom) + ")" * n
-            x_expr = "".join(x_parts) + f"iw/2-(iw/{base_zoom})/2" + ")" * n
+            # Build crop x-offset expression (centered by default)
+            cx_default = f"({sw}-{w})/2"
+            cy_default = f"({sh}-{h})/2"
+            cx_parts = []
+            for pt in edit_points:
+                t_start = pt["time"]
+                t_end = pt["time"] + pt["duration"]
+                if pt["type"] == "zoom_in":
+                    # Crop tighter = move crop origin toward center more
+                    extra = int((sw - w) * (1 - 1.0 / zoom) / 2)
+                    cx_parts.append(
+                        f"if(between(t,{t_start},{t_end}),{cx_default}+{extra},")
+                elif pt["type"] == "zoom_out":
+                    # Crop wider = move crop origin toward edges
+                    extra = int((sw - w) * (1 - base_zoom) / 2)
+                    cx_parts.append(
+                        f"if(between(t,{t_start},{t_end}),{cx_default}-{extra},")
+                elif pt["type"] == "shift":
+                    cx_parts.append(
+                        f"if(between(t,{t_start},{t_end}),{cx_default}+{shift_px},")
+
+            n = len(cx_parts)
+            cx_expr = "".join(cx_parts) + cx_default + ")" * n
 
             filter_parts.append(
-                f"[0:v]fps={fps},"
-                f"zoompan=z='{z_expr}':x='{x_expr}'"
-                f":y='ih/2-(ih/zoom)/2':d=1:s={w}x{h}:fps={fps},"
+                f"[0:v]fps={fps},scale={sw}:{sh},"
+                f"crop={w}:{h}:x='{cx_expr}':y='{cy_default}',"
                 f"setpts=PTS-STARTPTS[edited]"
             )
         else:

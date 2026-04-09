@@ -268,6 +268,135 @@ class TestRenderEnhancedWithoutAudio:
 
 
 # ===================================================================
+# 4b. render_enhanced — scale+crop vs zoompan (edit-points path)
+# ===================================================================
+
+class TestRenderEnhancedScaleCropWithEdits:
+    """When edit_points exist, filter_complex must use scale+crop (not zoompan)."""
+
+    @patch("quickcut.shutil.copy2")
+    @patch("quickcut._run_ffmpeg")
+    @patch("quickcut.subprocess.run")
+    def test_filter_complex_uses_scale_and_crop_not_zoompan(self, mock_subproc, mock_ffmpeg, mock_copy):
+        mock_subproc.return_value = _make_ffprobe_result(has_audio=True)
+
+        config = {
+            "rendering": {"output_resolution": [1080, 1920], "fps": 30, "crf": 18},
+            "dynamic_edits": {"zoom_amount": 1.08, "shift_amount": 0.03},
+        }
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            quickcut.render_enhanced(
+                video_path="input.mp4",
+                broll_clips=[],
+                edit_points=[{"time": 1.0, "duration": 0.5, "type": "zoom_in"}],
+                montage_path="",
+                montage_dur=0.0,
+                caption_ass="",
+                hook_ass="",
+                output_path="final.mp4",
+                config=config,
+                tmp_dir=tmp_dir,
+            )
+
+        cmd1 = mock_ffmpeg.call_args_list[0][0][0]
+        fc_idx = cmd1.index("-filter_complex")
+        fc_value = cmd1[fc_idx + 1]
+
+        # Must contain scale and crop (the new approach)
+        assert "scale=" in fc_value, f"scale= missing from filter_complex: {fc_value}"
+        assert "crop=" in fc_value, f"crop= missing from filter_complex: {fc_value}"
+
+        # Must NOT contain zoompan (the old approach)
+        assert "zoompan" not in fc_value, f"zoompan should not appear in filter_complex: {fc_value}"
+
+    @patch("quickcut.shutil.copy2")
+    @patch("quickcut._run_ffmpeg")
+    @patch("quickcut.subprocess.run")
+    def test_audio_filter_present_with_edits(self, mock_subproc, mock_ffmpeg, mock_copy):
+        """Audio resync filter must still appear when edit points exist and audio is present."""
+        mock_subproc.return_value = _make_ffprobe_result(has_audio=True)
+
+        config = {
+            "rendering": {"output_resolution": [1080, 1920], "fps": 30, "crf": 18},
+            "dynamic_edits": {"zoom_amount": 1.08},
+        }
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            quickcut.render_enhanced(
+                video_path="input.mp4",
+                broll_clips=[],
+                edit_points=[{"time": 2.0, "duration": 0.3, "type": "shift"}],
+                montage_path="",
+                montage_dur=0.0,
+                caption_ass="",
+                hook_ass="",
+                output_path="final.mp4",
+                config=config,
+                tmp_dir=tmp_dir,
+            )
+
+        cmd1 = mock_ffmpeg.call_args_list[0][0][0]
+        fc_idx = cmd1.index("-filter_complex")
+        fc_value = cmd1[fc_idx + 1]
+
+        assert "[0:a]aresample=async=1000:first_pts=0,asetpts=PTS-STARTPTS[aout]" in fc_value, (
+            f"Audio resync filter missing from filter_complex: {fc_value}"
+        )
+
+
+class TestRenderEnhancedNoEditsPath:
+    """When edit_points is empty, filter_complex should use plain scale (no crop, no zoompan)."""
+
+    @patch("quickcut.shutil.copy2")
+    @patch("quickcut._run_ffmpeg")
+    @patch("quickcut.subprocess.run")
+    def test_no_edits_uses_plain_scale(self, mock_subproc, mock_ffmpeg, mock_copy):
+        mock_subproc.return_value = _make_ffprobe_result(has_audio=False)
+
+        config = {
+            "rendering": {"output_resolution": [1080, 1920], "fps": 30, "crf": 18},
+            "dynamic_edits": {},
+        }
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            quickcut.render_enhanced(
+                video_path="input.mp4",
+                broll_clips=[{
+                    "clip_path": "broll.mp4",
+                    "start_time": 1.0,
+                    "end_time": 3.0,
+                }],
+                edit_points=[],
+                montage_path="",
+                montage_dur=0.0,
+                caption_ass="",
+                hook_ass="",
+                output_path="final.mp4",
+                config=config,
+                tmp_dir=tmp_dir,
+            )
+
+        cmd1 = mock_ffmpeg.call_args_list[0][0][0]
+        fc_idx = cmd1.index("-filter_complex")
+        fc_value = cmd1[fc_idx + 1]
+
+        # The no-edits path should have scale=1080:1920 (plain scale, no crop)
+        assert "scale=1080:1920" in fc_value, (
+            f"Expected plain scale=1080:1920 in filter_complex: {fc_value}"
+        )
+        assert "crop=" not in fc_value, (
+            f"crop= should not appear when there are no edit points: {fc_value}"
+        )
+        assert "zoompan" not in fc_value, (
+            f"zoompan should not appear in filter_complex: {fc_value}"
+        )
+
+
+# ===================================================================
 # 5. Hook phrase generation — extract_hook & _extract_subject
 # ===================================================================
 
